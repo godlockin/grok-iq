@@ -1489,6 +1489,15 @@ export type RuntimeSettings = {
   qualityRetryIsolationEnabled: boolean
   qualityRetryIsolationIntervalSeconds: number
   quarantineMinutes: number
+  keepaliveEnabled: boolean
+  keepaliveMinIntervalSeconds: number
+  keepaliveMaxIntervalSeconds: number
+  keepaliveBatchSize: number
+  keepaliveWorkerConcurrency: number
+  keepaliveTickSeconds: number
+  keepaliveFailureBackoffSeconds: number
+  keepaliveModel: string
+  keepaliveMaxOutputTokens: number
   bootstrap: {
     host: string
     port: number
@@ -1496,6 +1505,24 @@ export type RuntimeSettings = {
     corsOrigins: string[]
   }
   changed?: string[]
+}
+
+export type KeepAliveStatus = {
+  enabled: boolean
+  tickSeconds: number
+  trackedAccounts: number
+  lookbackHours: number
+  succeeded: number
+  failed: number
+  byStatus: Record<string, number>
+}
+
+export type KeepAliveTickResult = {
+  skipped?: string
+  tracked?: number
+  attempted: number
+  succeeded: number
+  failed: number
 }
 
 export type EditableRuntimeSettings = RuntimeSettings & {
@@ -1602,6 +1629,15 @@ export type RuntimeSettingsUpdate = Partial<
     | 'qualityRetryIsolationEnabled'
     | 'qualityRetryIsolationIntervalSeconds'
     | 'quarantineMinutes'
+    | 'keepaliveEnabled'
+    | 'keepaliveMinIntervalSeconds'
+    | 'keepaliveMaxIntervalSeconds'
+    | 'keepaliveBatchSize'
+    | 'keepaliveWorkerConcurrency'
+    | 'keepaliveTickSeconds'
+    | 'keepaliveFailureBackoffSeconds'
+    | 'keepaliveModel'
+    | 'keepaliveMaxOutputTokens'
   >
 > & {
   grok2apiAdminPassword?: string
@@ -1859,6 +1895,16 @@ function normalizeRuntimeSettings(value: RuntimeSettingsWire): RuntimeSettings {
     qualityRetryIsolationEnabled: value.qualityRetryIsolationEnabled ?? false,
     qualityRetryIsolationIntervalSeconds:
       value.qualityRetryIsolationIntervalSeconds ?? 60,
+    keepaliveEnabled: value.keepaliveEnabled ?? false,
+    keepaliveMinIntervalSeconds: value.keepaliveMinIntervalSeconds ?? 900,
+    keepaliveMaxIntervalSeconds: value.keepaliveMaxIntervalSeconds ?? 2700,
+    keepaliveBatchSize: value.keepaliveBatchSize ?? 10,
+    keepaliveWorkerConcurrency: value.keepaliveWorkerConcurrency ?? 3,
+    keepaliveTickSeconds: value.keepaliveTickSeconds ?? 60,
+    keepaliveFailureBackoffSeconds:
+      value.keepaliveFailureBackoffSeconds ?? 1800,
+    keepaliveModel: value.keepaliveModel ?? 'grok-4.5',
+    keepaliveMaxOutputTokens: value.keepaliveMaxOutputTokens ?? 220,
     scheduledProbeRegisterCooldownMinutes:
       value.scheduledProbeRegisterCooldownMinutes ?? 360,
     requestAuditEnabled: value.requestAuditEnabled ?? true,
@@ -3230,6 +3276,9 @@ export const api = {
   deleteRuns,
   restoreRunsAccountSettings,
   scheduler: () => request<SchedulerResponse>('/scheduler'),
+  keepaliveStatus: () => request<KeepAliveStatus>('/keepalive/status'),
+  runKeepaliveNow: () =>
+    request<KeepAliveTickResult>('/keepalive/run', { method: 'POST' }),
   deleteSchedulerExecution: (id: string) =>
     request<void>(`/scheduler/executions/${id}`, { method: 'DELETE' }),
   deleteSchedulerExecutions: (ids: string[]) =>

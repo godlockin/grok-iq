@@ -2,6 +2,7 @@ import { SettingsBootstrapTab } from '@/features/monitor/components/settings-boo
 import { SettingsConnectionTab } from '@/features/monitor/components/settings-connection-tab'
 import { SettingsExecutionTab } from '@/features/monitor/components/settings-execution-tab'
 import { SettingsIntegrationTab } from '@/features/monitor/components/settings-integration-tab'
+import { SettingsKeepAliveTab } from '@/features/monitor/components/settings-keepalive-tab'
 import { SettingsNotificationsTab } from '@/features/monitor/components/settings-notifications-tab'
 import { SettingsRequestAuditTab } from '@/features/monitor/components/settings-request-audit-tab'
 import { SettingsRiskTab } from '@/features/monitor/components/settings-risk-tab'
@@ -29,6 +30,7 @@ export function SettingsExecutionPage() {
   return (
     <SettingsRouteContent>
       <SettingsExecutionTab form={form} set={set} />
+      <SettingsKeepAliveTab form={form} set={set} />
     </SettingsRouteContent>
   )
 }

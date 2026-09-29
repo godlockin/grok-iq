@@ -43,6 +43,15 @@ export type SettingsForm = {
   probeTransientRetryMaxSeconds: number
   probeRoutePrefix: string
   probeDiagnosticPriority: number
+  keepaliveEnabled: boolean
+  keepaliveMinIntervalSeconds: number
+  keepaliveMaxIntervalSeconds: number
+  keepaliveBatchSize: number
+  keepaliveWorkerConcurrency: number
+  keepaliveTickSeconds: number
+  keepaliveFailureBackoffSeconds: number
+  keepaliveModel: string
+  keepaliveMaxOutputTokens: number
   requestAuditEnabled: boolean
   requestAuditAutoScanEnabled: boolean
   requestAuditAdaptiveScanEnabled: boolean
@@ -342,6 +351,15 @@ export function toSettingsForm(
     probeTransientRetryMaxSeconds: settings.probeTransientRetryMaxSeconds ?? 30,
     probeRoutePrefix: settings.probeRoutePrefix,
     probeDiagnosticPriority: settings.probeDiagnosticPriority,
+    keepaliveEnabled: settings.keepaliveEnabled,
+    keepaliveMinIntervalSeconds: settings.keepaliveMinIntervalSeconds,
+    keepaliveMaxIntervalSeconds: settings.keepaliveMaxIntervalSeconds,
+    keepaliveBatchSize: settings.keepaliveBatchSize,
+    keepaliveWorkerConcurrency: settings.keepaliveWorkerConcurrency,
+    keepaliveTickSeconds: settings.keepaliveTickSeconds,
+    keepaliveFailureBackoffSeconds: settings.keepaliveFailureBackoffSeconds,
+    keepaliveModel: settings.keepaliveModel,
+    keepaliveMaxOutputTokens: settings.keepaliveMaxOutputTokens,
     requestAuditEnabled: settings.requestAuditEnabled ?? true,
     requestAuditAutoScanEnabled: settings.requestAuditAutoScanEnabled ?? true,
     requestAuditAdaptiveScanEnabled:
@@ -471,6 +489,15 @@ export function buildSettingsPayload(
     probeTransientRetryMaxSeconds: form.probeTransientRetryMaxSeconds,
     probeRoutePrefix: form.probeRoutePrefix.trim(),
     probeDiagnosticPriority: form.probeDiagnosticPriority,
+    keepaliveEnabled: form.keepaliveEnabled,
+    keepaliveMinIntervalSeconds: form.keepaliveMinIntervalSeconds,
+    keepaliveMaxIntervalSeconds: form.keepaliveMaxIntervalSeconds,
+    keepaliveBatchSize: form.keepaliveBatchSize,
+    keepaliveWorkerConcurrency: form.keepaliveWorkerConcurrency,
+    keepaliveTickSeconds: form.keepaliveTickSeconds,
+    keepaliveFailureBackoffSeconds: form.keepaliveFailureBackoffSeconds,
+    keepaliveModel: form.keepaliveModel.trim(),
+    keepaliveMaxOutputTokens: form.keepaliveMaxOutputTokens,
     requestAuditEnabled: form.requestAuditEnabled,
     requestAuditAutoScanEnabled: form.requestAuditAutoScanEnabled,
     requestAuditAdaptiveScanEnabled: form.requestAuditAdaptiveScanEnabled,
