@@ -327,6 +327,15 @@ class RuntimeSettingsService:
                 s.quality_retry_isolation_interval_seconds
             ),
             "quarantineMinutes": s.quarantine_minutes,
+            "keepaliveEnabled": s.keepalive_enabled,
+            "keepaliveMinIntervalSeconds": s.keepalive_min_interval_seconds,
+            "keepaliveMaxIntervalSeconds": s.keepalive_max_interval_seconds,
+            "keepaliveBatchSize": s.keepalive_batch_size,
+            "keepaliveWorkerConcurrency": s.keepalive_worker_concurrency,
+            "keepaliveTickSeconds": s.keepalive_tick_seconds,
+            "keepaliveFailureBackoffSeconds": s.keepalive_failure_backoff_seconds,
+            "keepaliveModel": s.keepalive_model,
+            "keepaliveMaxOutputTokens": s.keepalive_max_output_tokens,
             "bootstrap": {
                 "host": s.host,
                 "port": s.port,

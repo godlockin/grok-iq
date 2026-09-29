@@ -637,3 +637,65 @@ def model_dict(value: Any) -> dict[str, Any]:
             to_app_timezone(item) if isinstance(item, datetime) else item
         )
     return result
+
+
+class KeepAliveAccount(Base):
+    """Per-account keep-alive bookkeeping.
+
+    Tracks when an account was last warmed and when it becomes eligible again.
+    Kept separate from ``probe_runs`` on purpose: keep-alive traffic must never
+    influence degradation scoring, account health, or probe history.
+    """
+
+    __tablename__ = "keepalive_accounts"
+
+    account_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    account_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    # ``next_due_at`` is assigned a random point inside the next interval, so
+    # accounts spread out instead of firing together on every tick.
+    last_sent_at: Mapped[datetime | None] = mapped_column(AppDateTime())
+    next_due_at: Mapped[datetime] = mapped_column(AppDateTime(), nullable=False, index=True)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # When set, the account is skipped until this moment. Used for cooling,
+    # disabled, and repeatedly-failing accounts so one bad account cannot
+    # consume the whole tick.
+    skip_until: Mapped[datetime | None] = mapped_column(AppDateTime(), index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(AppDateTime(), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        AppDateTime(), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class KeepAliveRun(Base):
+    """One executed keep-alive request and its outcome.
+
+    Evidence is stored for troubleshooting only. Nothing here feeds account
+    scoring, risk rules, or the probe dashboards.
+    """
+
+    __tablename__ = "keepalive_runs"
+    __table_args__ = (
+        Index("ix_keepalive_run_account_created", "account_id", "created_at"),
+        Index("ix_keepalive_run_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    account_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    request_id: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    audit_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    status_code: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    # The rendered prompt is stored so an operator can see exactly what was
+    # sent. It is short, contains no credentials, and never includes a marker.
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    temperature: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(AppDateTime(), default=utc_now, nullable=False)

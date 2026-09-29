@@ -242,6 +242,29 @@ class Settings(BaseSettings):
     )
     quarantine_minutes: int = Field(default=30, ge=1, le=7 * 24 * 60)
 
+    # Keep-alive warms accounts with low-cost chat traffic so they do not look
+    # dormant. It is intentionally a separate pipeline from probe runs: no
+    # marker, no TPS threshold, and nothing written to probe tables, so warm
+    # traffic can never influence degradation scoring or account health.
+    keepalive_enabled: bool = False
+    # Each account is rescheduled at a uniformly random point inside
+    # [min, max] seconds, which spreads the pool instead of synchronizing it.
+    keepalive_min_interval_seconds: int = Field(default=900, ge=60, le=7 * 24 * 3600)
+    keepalive_max_interval_seconds: int = Field(default=2700, ge=60, le=7 * 24 * 3600)
+    # Upper bound on requests issued per tick. Keeps a large pool from
+    # stampeding grok2api when many accounts come due in the same window.
+    keepalive_batch_size: int = Field(default=10, ge=1, le=500)
+    keepalive_worker_concurrency: int = Field(default=3, ge=1, le=32)
+    # How often the scheduler wakes to look for due accounts. This is a poll
+    # cadence, not a send interval; actual send times come from the randomized
+    # per-account due times.
+    keepalive_tick_seconds: int = Field(default=60, ge=10, le=3600)
+    # Backoff applied to an account after a failure so cooling or disabled
+    # accounts do not consume a slot on every tick.
+    keepalive_failure_backoff_seconds: int = Field(default=1800, ge=60, le=24 * 3600)
+    keepalive_model: str = "grok-4.5"
+    keepalive_max_output_tokens: int = Field(default=220, ge=32, le=4096)
+
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     RUNTIME_FIELDS: ClassVar[tuple[str, ...]] = (
@@ -337,6 +360,15 @@ class Settings(BaseSettings):
         "quality_retry_isolation_enabled",
         "quality_retry_isolation_interval_seconds",
         "quarantine_minutes",
+        "keepalive_enabled",
+        "keepalive_min_interval_seconds",
+        "keepalive_max_interval_seconds",
+        "keepalive_batch_size",
+        "keepalive_worker_concurrency",
+        "keepalive_tick_seconds",
+        "keepalive_failure_backoff_seconds",
+        "keepalive_model",
+        "keepalive_max_output_tokens",
     )
     SECRET_RUNTIME_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {

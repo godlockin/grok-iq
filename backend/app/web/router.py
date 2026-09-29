@@ -11,6 +11,7 @@ from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.egress_service import EgressService
 from app.services.export_service import ExportService
+from app.services.keepalive import KeepAliveService
 from app.services.probe_manager import ProbeManager
 from app.services.register_integration import RegisterIntegrationService
 from app.services.request_audit_service import RequestAuditService
@@ -31,6 +32,7 @@ from .routes.integrations import (
     build_integrations_router,
     build_register_events_router,
 )
+from .routes.keepalive import build_keepalive_router
 from .routes.probes import build_probes_router
 from .routes.public import build_public_router
 from .routes.request_audits import build_request_audits_router
@@ -56,6 +58,7 @@ def build_router(
     register_integration: RegisterIntegrationService,
     wechat_notifications: WeChatAccountNotificationService,
     updates: UpdateCheckService,
+    keepalive: KeepAliveService | None = None,
     request_audits: RequestAuditService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
@@ -108,8 +111,11 @@ def build_router(
             probes=probe_manager,
             scheduler=scheduler,
             wechat=wechat_notifications,
+            keepalive=keepalive,
         )
     )
+    if keepalive is not None:
+        protected.include_router(build_keepalive_router(keepalive))
     protected.include_router(build_chat_router(chat_service))
     if request_audits is not None:
         protected.include_router(build_request_audits_router(request_audits))

@@ -21,6 +21,7 @@ class RuntimeSettingsValidator:
         self._normalize_reasoning_model_policies(candidate)
         self._validate_request_audit(candidate)
         self._validate_retry(candidate)
+        self._validate_keepalive(candidate)
         self._validate_connection(candidate)
         self._validate_scheduler(candidate)
         self._validate_route_prefix(candidate)
@@ -103,6 +104,16 @@ class RuntimeSettingsValidator:
     def _validate_retry(candidate: Settings) -> None:
         if candidate.probe_transient_retry_base_seconds > candidate.probe_transient_retry_max_seconds:
             raise ValueError("探针重试基础等待不能大于最大等待")
+
+    @staticmethod
+    def _validate_keepalive(candidate: Settings) -> None:
+        if (
+            candidate.keepalive_min_interval_seconds
+            > candidate.keepalive_max_interval_seconds
+        ):
+            raise ValueError("保活最小间隔不能大于最大间隔")
+        if not candidate.keepalive_model.strip():
+            raise ValueError("保活模型不能为空")
 
     @staticmethod
     def _validate_request_audit(candidate: Settings) -> None:

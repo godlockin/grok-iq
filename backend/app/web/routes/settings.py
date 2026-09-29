@@ -7,6 +7,7 @@ from fastapi import APIRouter, Response
 from app.core.config import Settings
 from app.integrations.grok2api.client import Grok2APIClient
 from app.persistence.account_repository import AccountRepository
+from app.services.keepalive import KeepAliveService
 from app.services.probe_manager import ProbeManager
 from app.services.scheduler import SchedulerService
 from app.services.settings_service import RuntimeSettingsService
@@ -25,6 +26,7 @@ def build_settings_router(
     probes: ProbeManager,
     scheduler: SchedulerService,
     wechat: WeChatAccountNotificationService,
+    keepalive: KeepAliveService | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -92,6 +94,13 @@ def build_settings_router(
                 settings.analysis_window_hours,
             )
             probes.repository.refresh_all_run_summaries()
+        if keepalive is not None and any(
+            key.startswith("keepalive_") for key in changed
+        ):
+            # The loop sleeps for keepalive_tick_seconds, so without an explicit
+            # wake a shortened interval would not take effect until the old
+            # (possibly much longer) sleep expires.
+            keepalive.wake()
         await scheduler.reconfigure()
         return {**runtime_settings.public_view(), "changed": changed}
 

@@ -20,6 +20,7 @@ from app.persistence.register_event_repository import RegisterEventRepository
 from app.persistence.request_audit_repository import RequestAuditRepository
 from app.persistence.settings_repository import SettingsRepository
 from app.persistence.sso_report_repository import SsoReportRepository
+from app.persistence.keepalive_repository import KeepAliveRepository
 from app.services.account_service import AccountService
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
@@ -33,6 +34,7 @@ from app.services.settings_service import RuntimeSettingsService
 from app.services.sso_report_service import SsoReportService
 from app.services.update_check import UpdateCheckService
 from app.services.wechat_notification import WeChatAccountNotificationService
+from app.services.keepalive import KeepAliveService
 from app.web.exception_handlers import install_exception_handlers
 from app.web.router import build_router
 
@@ -124,7 +126,12 @@ register_integration_service = RegisterIntegrationService(
 )
 probe_manager.register_integration = register_integration_service
 update_check_service = UpdateCheckService()
-
+keepalive_repository = KeepAliveRepository(database)
+keepalive_service = KeepAliveService(
+    settings=settings,
+    repository=keepalive_repository,
+    client=grok_client,
+)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -153,6 +160,7 @@ async def lifespan(_: FastAPI):
         settings.analysis_window_hours,
     )
     await probe_manager.start()
+    await keepalive_service.start()
     await register_integration_service.start()
     await sso_report_service.start()
     await scheduler_service.start()
@@ -164,6 +172,7 @@ async def lifespan(_: FastAPI):
         await scheduler_service.stop()
         await sso_report_service.stop()
         await register_integration_service.stop()
+        await keepalive_service.stop()
         await probe_manager.stop()
         database.dispose()
 
@@ -201,6 +210,7 @@ app.include_router(
         register_integration=register_integration_service,
         wechat_notifications=wechat_notification_service,
         updates=update_check_service,
+        keepalive=keepalive_service,
     )
 )
 

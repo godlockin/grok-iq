@@ -583,6 +583,29 @@ class RuntimeSettingsInput(BaseModel):
         le=600,
     )
     quarantine_minutes: int | None = Field(default=None, alias="quarantineMinutes", ge=1, le=7 * 24 * 60)
+    keepalive_enabled: bool | None = Field(default=None, alias="keepaliveEnabled")
+    keepalive_min_interval_seconds: int | None = Field(
+        default=None, alias="keepaliveMinIntervalSeconds", ge=60, le=7 * 24 * 3600
+    )
+    keepalive_max_interval_seconds: int | None = Field(
+        default=None, alias="keepaliveMaxIntervalSeconds", ge=60, le=7 * 24 * 3600
+    )
+    keepalive_batch_size: int | None = Field(
+        default=None, alias="keepaliveBatchSize", ge=1, le=500
+    )
+    keepalive_worker_concurrency: int | None = Field(
+        default=None, alias="keepaliveWorkerConcurrency", ge=1, le=32
+    )
+    keepalive_tick_seconds: int | None = Field(
+        default=None, alias="keepaliveTickSeconds", ge=10, le=3600
+    )
+    keepalive_failure_backoff_seconds: int | None = Field(
+        default=None, alias="keepaliveFailureBackoffSeconds", ge=60, le=24 * 3600
+    )
+    keepalive_model: str | None = Field(default=None, alias="keepaliveModel")
+    keepalive_max_output_tokens: int | None = Field(
+        default=None, alias="keepaliveMaxOutputTokens", ge=32, le=4096
+    )
     clear_secrets: list[SecretSettingName] = Field(default_factory=list, alias="clearSecrets")
 
     def runtime_changes(self) -> dict[str, Any]:
