@@ -276,9 +276,13 @@ async def test_public_upstream_summary_returns_counts_only(tmp_path: Path):
     assert "recovery" not in public
     assert "issues" not in public
     assert "risk" not in public
-    assert public["providers"]["grok_build"] == {"capacity": 63}
-    assert public["providers"]["grok_web"] == {"capacity": 67}
-    assert public["providers"]["grok_console"] == {"capacity": 0}
+    # Public providers expose only a 0-100 capacity percentage. Absolute
+    # inventory counts stay admin-only, so the public view must not leak them
+    # even though the upstream payload carries them. ``round`` uses banker's
+    # rounding, so 5/8 is 62.5 -> 62 and 2/3 is 66.67 -> 67.
+    assert public["providers"]["grok_build"] == {"capacity": 62}  # 5/8
+    assert public["providers"]["grok_web"] == {"capacity": 67}  # 2/3
+    assert public["providers"]["grok_console"] == {"capacity": 0}  # 0/1
     assert "total" not in public["providers"]["grok_build"]
     assert "available" not in public["providers"]["grok_build"]
     assert admin["providers"]["grok_build"] == {"total": 8, "available": 5}
