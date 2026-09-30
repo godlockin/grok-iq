@@ -807,7 +807,9 @@ class RequestAuditService:
                 evaluations=evaluations,
             )
             trigger_account_ids.update(
-                self.repository.retryable_verification_account_ids()
+                self.repository.retryable_verification_account_ids(
+                    internal_client_key_prefix=self._internal_client_key_prefix()
+                )
             )
             pre_disable_checks = await self._process_pre_disable_checks(
                 self._pre_disable_candidates(

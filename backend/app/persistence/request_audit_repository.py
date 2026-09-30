@@ -376,17 +376,27 @@ class RequestAuditRepository:
             result.setdefault(int(row.account_id), model_dict(row))
         return result
 
-    def retryable_verification_account_ids(self) -> set[int]:
+    def retryable_verification_account_ids(
+        self, *, internal_client_key_prefix: str = ""
+    ) -> set[int]:
         """Return accounts whose confirmed verdict still needs an action retry.
 
         Probe isolation can temporarily mark an account as already quarantined.
         Those rows stay retryable after recovery so request-audit can still
         apply a permanent disable. Accounts that are still quarantined are
         excluded here to avoid repeating the same alert on every scan.
+
+        ``internal_client_key_prefix`` drops retry rows whose originating
+        request was one of GrokIQ's own. This set is unioned into the trigger
+        set *after* the per-scan filter, so without this a backlog of probe
+        verdicts is re-applied with ``force=True, permanent=True`` and
+        re-isolates accounts that the scan deliberately skipped. Measured live:
+        47 accounts were re-isolated that way while the scan-side filter
+        reported zero probe traffic.
         """
 
         with self.database.session() as session:
-            rows = session.scalars(
+            statement = (
                 select(RequestAuditAccountVerification.account_id)
                 .outerjoin(
                     AccountAssessment,
@@ -405,8 +415,22 @@ class RequestAuditRepository:
                         AccountAssessment.monitor_status != "quarantined",
                     ),
                 )
-                .distinct()
-            ).all()
+            )
+            if internal_client_key_prefix:
+                internal_keys = select(RequestAuditRecord.upstream_id).where(
+                    func.lower(RequestAuditRecord.client_key_name).like(
+                        f"{internal_client_key_prefix.lower()}%", escape="\\"
+                    )
+                )
+                statement = statement.where(
+                    or_(
+                        RequestAuditAccountVerification.audit_upstream_id.is_(None),
+                        RequestAuditAccountVerification.audit_upstream_id.not_in(
+                            internal_keys
+                        ),
+                    )
+                )
+            rows = session.scalars(statement.distinct()).all()
         return {int(value) for value in rows if int(value) > 0}
 
     def delete_older_than(self, cutoff: datetime) -> int:

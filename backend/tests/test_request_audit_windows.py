@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from app.core.clock import utc_now
 from app.core.config import Settings
+from app.persistence.database import Database
+from app.persistence.models import RequestAuditRecord
+from app.persistence.request_audit_repository import RequestAuditRepository
 from app.services.request_audit_service import RequestAuditService
 
 
@@ -309,6 +313,85 @@ def test_renaming_the_probe_prefix_keeps_the_filter_aligned():
         discovered_after=now - timedelta(minutes=5),
         evaluations=other_evaluations,
     ) == {7}
+
+
+def test_retryable_backlog_excludes_probe_originated_verdicts(tmp_path: Path):
+    """A probe verdict must never be re-applied from the retry backlog.
+
+    ``retryable_verification_account_ids`` is unioned into the trigger set
+    *after* the per-scan filter, so a backlog row bypasses the client-key
+    check entirely and is re-applied with ``force=True, permanent=True``.
+    Measured live: 47 accounts were re-isolated that way while the scan-side
+    filter reported zero probe traffic.
+    """
+
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    repository = RequestAuditRepository(database)
+    with database.transaction() as session:
+        session.add(
+            RequestAuditRecord(
+                upstream_id="5001",
+                request_id="req-5001",
+                day_key="2026-09-30",
+                provider="grok_build",
+                operation="chat",
+                model_public_id="grok-4.7",
+                model_upstream_model="Build/grok-4.6",
+                account_id=11,
+                client_key_id="1",
+                client_key_name="grokiq-probe-abc123",
+                status_code=200,
+                output_tokens=1500,
+                reasoning_tokens=1000,
+                tps=1500.0,
+                created_at=utc_now(),
+            )
+        )
+        session.add(
+            RequestAuditRecord(
+                upstream_id="5002",
+                request_id="req-5002",
+                day_key="2026-09-30",
+                provider="grok_build",
+                operation="chat",
+                model_public_id="grok-4.7",
+                model_upstream_model="Build/grok-4.6",
+                account_id=12,
+                client_key_id="1",
+                client_key_name="Default User Key",
+                status_code=200,
+                output_tokens=1500,
+                reasoning_tokens=1000,
+                tps=1500.0,
+                created_at=utc_now(),
+            )
+        )
+    for account_id, upstream_id in ((11, "5001"), (12, "5002")):
+        repository.create_verification(
+            {
+                "account_id": account_id,
+                "audit_upstream_id": upstream_id,
+                "audit_created_at": utc_now(),
+                "audit_tps": 1500.0,
+                "status": "flagged",
+                "action_status": "pending",
+            }
+        )
+
+    unfiltered = repository.retryable_verification_account_ids()
+    filtered = repository.retryable_verification_account_ids(
+        internal_client_key_prefix="grokiq-probe-"
+    )
+
+    assert unfiltered == {11, 12}
+    # The probe-originated verdict must not be re-applied; real traffic still is.
+    assert filtered == {12}
+    # An empty prefix keeps the previous behaviour for callers that opt out.
+    assert repository.retryable_verification_account_ids(
+        internal_client_key_prefix=""
+    ) == {11, 12}
+    database.dispose()
 
 
 def _audit_records(*, operation: str, images: int, tps: float, count: int = 4):
