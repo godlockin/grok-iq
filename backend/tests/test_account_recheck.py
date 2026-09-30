@@ -17,7 +17,7 @@ from app.persistence.account_repository import AccountRepository
 from app.persistence.database import Database
 from app.persistence.models import AccountAssessment, ProbeRun
 from app.persistence.probe_repository import ProbeRepository
-from app.services.account_recheck import AccountRecheckService
+from app.services.account_recheck import SKIP_RETRY_MINUTES, AccountRecheckService
 from app.services.account_service import AccountService
 from app.services.recheck_schedule import recheck_delay_minutes
 
@@ -524,7 +524,7 @@ async def test_scan_skips_when_disabled(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_scan_survives_a_failing_account(tmp_path: Path) -> None:
-    database, _accounts, _probes, recheck, _settings = _build(tmp_path)
+    database, accounts, _probes, recheck, _settings = _build(tmp_path)
     _isolate(database, 1, due_in_minutes=-1)
     _isolate(database, 2, due_in_minutes=-1)
 
@@ -540,6 +540,57 @@ async def test_scan_survives_a_failing_account(tmp_path: Path) -> None:
     assert result["candidates"] == 2
     assert result["enqueued"] == 1
     assert result["skippedCount"] == 1
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_operational_skip_is_retried_soon_not_after_a_full_window(
+    tmp_path: Path,
+) -> None:
+    """A short lock must not cost the account a full re-verification window.
+
+    Leaving the already-expired due time in place keeps the account in the
+    queue but retries it only after 120-360 minutes, so a five-minute conflict
+    would cost hours of isolation.
+    """
+
+    database, accounts, _probes, recheck, _settings = _build(tmp_path)
+    _isolate(database, 1, due_in_minutes=-1)
+
+    async def blocked(**_kwargs: Any) -> str:
+        return ""
+
+    recheck.enqueue = blocked  # type: ignore[assignment]
+
+    before = utc_now()
+    await recheck.scan()
+
+    due_at = accounts.get_assessment(1)["recheck_due_at"]
+    assert due_at is not None
+    # Due again within minutes, and no longer in the past.
+    assert due_at >= before + timedelta(minutes=SKIP_RETRY_MINUTES - 1)
+    assert due_at < before + timedelta(minutes=15)
+    assert accounts.due_rechecks(limit=10) == []
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_enqueue_is_also_retried_soon(tmp_path: Path) -> None:
+    database, accounts, _probes, recheck, _settings = _build(tmp_path)
+    _isolate(database, 1, due_in_minutes=-1)
+
+    async def boom(**_kwargs: Any) -> str:
+        raise RuntimeError("该账号存在未完成的原设置恢复")
+
+    recheck.enqueue = boom  # type: ignore[assignment]
+
+    before = utc_now()
+    result = await recheck.scan()
+
+    assert result["skippedCount"] == 1
+    due_at = accounts.get_assessment(1)["recheck_due_at"]
+    assert due_at is not None
+    assert due_at < before + timedelta(minutes=15)
     database.dispose()
 
 

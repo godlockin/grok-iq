@@ -87,6 +87,9 @@ NON_VERDICT_CLASSIFICATIONS = frozenset({"insufficient", "unmeasurable", "error"
 # following instructions. Every TPS-band classification measured a 0% marker-miss
 # rate, so a throughput spike cannot keep an account isolated.
 DEGRADED_CLASSIFICATIONS = frozenset({"marker_miss"})
+# How soon to retry an account that could not be probed for operational reasons.
+# Kept below the drain interval so a short lock does not cost a full window.
+SKIP_RETRY_MINUTES = 5
 
 __all__ = [
     "AccountRecheckService",
@@ -142,11 +145,13 @@ class AccountRecheckService:
                 logger.warning(
                     "recheck enqueue failed account=%s error=%s", account_id, exc
                 )
+                self._retry_soon(account_id)
                 skipped.append({"accountId": account_id, "reason": str(exc)})
                 continue
             if created:
                 enqueued += 1
             else:
+                self._retry_soon(account_id)
                 skipped.append({"accountId": account_id, "reason": "not_probeable"})
         logger.info(
             "recheck scan candidates=%s enqueued=%s skipped=%s",
@@ -362,6 +367,20 @@ class AccountRecheckService:
 
         self.accounts.schedule_recheck(
             account_id, due_at=self._next_due(failures=failures)
+        )
+
+    def _retry_soon(self, account_id: int) -> None:
+        """Retry shortly when the account could not be probed for operational reasons.
+
+        A probe blocked by a concurrent run, an unfinished settings restore, or
+        a missing egress says nothing about the account itself. Leaving the
+        original (already expired) due time in place would keep it in the queue
+        but retry it only after a full re-verification window, so a five-minute
+        lock would cost the account two to six hours of isolation.
+        """
+
+        self.accounts.schedule_recheck(
+            account_id, due_at=utc_now() + timedelta(minutes=SKIP_RETRY_MINUTES)
         )
 
     def _next_due(self, *, failures: int):
