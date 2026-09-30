@@ -89,6 +89,102 @@ def test_output_floor_is_configurable_and_zero_disables_it():
     )
 
 
+def test_empty_stream_is_not_a_model_failure():
+    """A dead upstream stream is a retry, not evidence of degradation.
+
+    Measured live: ``chunks=0``, ``output_tokens=0``, ``usage={}``, HTTP 200,
+    duration pinned near grok2api's 120s read timeout. The same accounts
+    answered normally on the other round of the same run, so classifying this
+    as ``marker_miss`` isolated healthy accounts for a transient condition.
+    """
+
+    result = classify_sample(
+        SampleMetrics(
+            status_code=200,
+            output_tokens=0,
+            reasoning_tokens=0,
+            first_token_ms=0,
+            duration_ms=120686,
+            egress_key="direct",
+            expected_matched=False,
+        ),
+        Thresholds(),
+    )
+
+    assert result.name == "empty_response"
+    # Not anomalous: an empty stream must not raise the account's risk score.
+    assert result.anomalous is False
+    assert result.hard is False
+    assert result.severity <= 1
+
+
+def test_empty_stream_outranks_marker_miss():
+    """An empty stream trivially "fails" the marker check.
+
+    The marker rule has lower priority on purpose, otherwise every timeout
+    would be recorded as a format miss and condemn the account.
+    """
+
+    result = classify_sample(
+        SampleMetrics(
+            status_code=200,
+            output_tokens=0,
+            reasoning_tokens=0,
+            first_token_ms=0,
+            duration_ms=120000,
+            egress_key="direct",
+            expected_matched=False,
+        ),
+        Thresholds(),
+    )
+
+    assert result.name == "empty_response"
+    assert result.rule_id == "empty_response"
+
+
+def test_a_reply_without_the_marker_is_still_a_marker_miss():
+    """Real content that only misses the marker keeps its own classification.
+
+    Account 588 answered with a correct three-point summary and 1686 tokens,
+    omitting only the final marker line. That is a format miss on a working
+    model, not an empty upstream, so it must not be folded into the retry path.
+    """
+
+    result = classify_sample(
+        SampleMetrics(
+            status_code=200,
+            output_tokens=1686,
+            reasoning_tokens=0,
+            first_token_ms=1000,
+            duration_ms=35819,
+            egress_key="direct",
+            expected_matched=False,
+        ),
+        Thresholds(),
+    )
+
+    assert result.name == "marker_miss"
+
+
+def test_error_status_is_not_reported_as_an_empty_stream():
+    """A non-2xx response is an error; folding it into the retry path would
+    hide a genuine upstream failure."""
+
+    result = classify_sample(
+        SampleMetrics(
+            status_code=500,
+            output_tokens=0,
+            reasoning_tokens=0,
+            first_token_ms=None,
+            duration_ms=100,
+            egress_key="direct",
+        ),
+        Thresholds(),
+    )
+
+    assert result.name == "error"
+
+
 def test_normal_throughput_does_not_fall_through_to_fast_risk():
     result = classify_sample(
         SampleMetrics(

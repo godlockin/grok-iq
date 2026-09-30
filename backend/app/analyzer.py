@@ -475,6 +475,35 @@ def _rule_unmeasurable(context: RuleContext, _thresholds: Thresholds) -> RuleMat
     return None
 
 
+def _rule_empty_response(context: RuleContext, _thresholds: Thresholds) -> RuleMatch | None:
+    """Detect an upstream that accepted the request but streamed nothing.
+
+    This is not a model failure. Measured live: ``chunks=0``,
+    ``output_tokens=0``, ``usage={}``, HTTP 200, and a duration pinned at
+    ~120s, which is grok2api's read timeout cutting the stream before the
+    first token. The same accounts answered normally on the other round of the
+    same re-verification run, so judging this as ``marker_miss`` isolated
+    healthy accounts for a transient upstream condition.
+
+    Classifying it keeps it out of the anomaly set entirely: it is neither
+    evidence of degradation nor a failure of the account, so the recheck verdict
+    treats the round as inconclusive and retries instead of condemning.
+    """
+
+    if context.status_code < 200 or context.status_code >= 300:
+        return None
+    # A reasoned or partial reply is a measurement, not a dead stream.
+    if context.output_tokens > 0 or context.reasoning_tokens > 0:
+        return None
+    if context.first_token_ms is not None and context.first_token_ms > 0:
+        return None
+    return RuleMatch(
+        "empty_response",
+        severity=1,
+        reason="上游未返回任何内容（连接建立但流式响应为空）",
+    )
+
+
 def _rule_marker_miss(context: RuleContext, _thresholds: Thresholds) -> RuleMatch | None:
     if context.scope == "probe" and context.expected_matched is False:
         return RuleMatch(
@@ -703,6 +732,18 @@ for _builtin_rule in (
         _rule_unmeasurable,
         scopes=frozenset({"probe"}),
         priority=20,
+        configurable=False,
+    ),
+    RiskRule(
+        "empty_response",
+        "上游空响应",
+        "连接建立但流式响应没有任何内容，属上游超时而非模型降智",
+        _rule_empty_response,
+        scopes=frozenset({"probe"}),
+        # Ahead of marker_miss: an empty stream trivially "fails" the marker
+        # check, and letting marker_miss win would condemn a healthy account
+        # for a transient upstream timeout.
+        priority=25,
         configurable=False,
     ),
     RiskRule(

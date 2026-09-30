@@ -83,6 +83,13 @@ RECHECK_PROXY_TARGET = {"kind": "direct", "id": None, "name": "上游调度（�
 # These classifications describe an unusable sample, not a degraded one. They
 # are excluded from the verdict so a timeout never revives and never condemns.
 NON_VERDICT_CLASSIFICATIONS = frozenset({"insufficient", "unmeasurable", "error"})
+# The upstream accepted the request but streamed nothing: grok2api's read
+# timeout cut the stream before the first token. Measured live, the same
+# accounts answered normally on the other round of the same run, so this round
+# is a retry, not a verdict. Counting it as a failure would condemn healthy
+# accounts for a transient upstream condition, and clearing on it would revive
+# an account we never actually measured.
+EMPTY_RESPONSE_CLASSIFICATION = "empty_response"
 # The only classification that carries evidence of a model that stopped
 # following instructions. Every TPS-band classification measured a 0% marker-miss
 # rate, so a throughput spike cannot keep an account isolated.
@@ -236,21 +243,49 @@ class AccountRecheckService:
                 failures=failures,
                 reason="本次复检样本均不可用于判定",
             )
+        # An empty response is a retry trigger, not a verdict. If every usable
+        # sample is an empty stream, the upstream never answered and the account
+        # itself was never measured. Treating this as a pass would revive an
+        # account on no evidence; treating it as a failure would bury a healthy
+        # one for a transient timeout.
+        empty = [
+            sample
+            for sample in judged
+            if str(sample.get("classification") or "")
+            == EMPTY_RESPONSE_CLASSIFICATION
+        ]
+        if len(empty) == len(judged):
+            return _verdict(
+                "inconclusive",
+                failures=failures,
+                reason=f"上游连续 {len(empty)} 次未返回内容，等待重试",
+                detail={"emptyResponses": len(empty)},
+            )
         degraded = [
             sample
             for sample in judged
             if str(sample.get("classification") or "") in DEGRADED_CLASSIFICATIONS
         ]
+        # Counted over the samples that actually produced a reply: an empty
+        # stream trivially "fails" the marker check, and counting it would
+        # report a format miss that never happened.
         marker_misses = sum(
-            1 for sample in judged if sample.get("expected_matched") is False
+            1
+            for sample in judged
+            if sample.get("expected_matched") is False
+            and str(sample.get("classification") or "")
+            not in {EMPTY_RESPONSE_CLASSIFICATION, *NON_VERDICT_CLASSIFICATIONS}
         )
         throughput = [
             float(sample.get("upstream_tps") or sample.get("tps") or 0.0)
             for sample in judged
+            if str(sample.get("classification") or "")
+            != EMPTY_RESPONSE_CLASSIFICATION
         ]
         summary = {
             "samples": len(judged),
             "markerMisses": marker_misses,
+            "emptyResponses": len(empty),
             "classifications": sorted(
                 {str(sample["classification"]) for sample in judged}
             ),

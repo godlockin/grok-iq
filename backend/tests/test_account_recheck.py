@@ -191,7 +191,13 @@ def _add_run(
                     round_number=index,
                     classification=classification,
                     status=sample_status,
-                    expected_matched=classification != "marker_miss",
+                    # An empty stream reports expected_matched=False only because
+                    # nothing came back, which is not a format miss.
+                    expected_matched=(
+                        False
+                        if classification in {"marker_miss", "empty_response"}
+                        else True
+                    ),
                 )
             )
     return run_id
@@ -376,6 +382,59 @@ def test_evaluate_ignores_failed_samples(tmp_path: Path) -> None:
     verdict = recheck.evaluate_run(account_id=1, run_id=run_id)
 
     assert verdict["outcome"] == "inconclusive"
+    database.dispose()
+
+
+def test_evaluate_is_inconclusive_when_every_sample_is_an_empty_stream(
+    tmp_path: Path,
+) -> None:
+    """An all-empty round measured nothing, so it must not produce a verdict.
+
+    Live evidence: these accounts answered normally on the other round of the
+    same run. Counting the timeout as a failure would keep them isolated for a
+    transient upstream condition; clearing on it would revive an account that
+    was never actually measured.
+    """
+
+    database, _accounts, _probes, recheck, _settings = _build(tmp_path)
+    _isolate(database, 1, due_in_minutes=-1, failures=0)
+    run_id = _add_run(
+        database, 1, classifications=[("done", "empty_response")] * 2
+    )
+
+    verdict = recheck.evaluate_run(account_id=1, run_id=run_id)
+
+    assert verdict["outcome"] == "inconclusive"
+    # The failure count is preserved: an inconclusive round is not evidence
+    # either for or against the account.
+    assert verdict["failures"] == 0
+    assert verdict["detail"]["emptyResponses"] == 2
+    database.dispose()
+
+
+def test_evaluate_recovers_when_an_empty_stream_is_mixed_with_a_good_reply(
+    tmp_path: Path,
+) -> None:
+    """One dead stream plus one measured reply is enough to judge.
+
+    The account did answer, so the round is usable: the empty sample is skipped
+    and the reply decides.
+    """
+
+    database, _accounts, _probes, recheck, _settings = _build(tmp_path)
+    _isolate(database, 1, due_in_minutes=-1)
+    run_id = _add_run(
+        database,
+        1,
+        classifications=[("done", "empty_response"), ("done", "normal")],
+    )
+
+    verdict = recheck.evaluate_run(account_id=1, run_id=run_id)
+
+    assert verdict["outcome"] == "recovered"
+    assert verdict["detail"]["emptyResponses"] == 1
+    # The empty sample's expected_matched=0 must not be reported as a miss.
+    assert verdict["detail"]["markerMisses"] == 0
     database.dispose()
 
 
