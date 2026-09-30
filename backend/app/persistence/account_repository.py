@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from dataclasses import replace
@@ -53,6 +54,8 @@ FIXED_EGRESS_RISK_MIGRATION_KEY = "fixed_egress_risk_formula_v1"
 ALL_EGRESS_RISK_MIGRATION_KEY = "all_egress_risk_formula_v1"
 MAX_OPERATOR_NOTES = 50
 MAX_OPERATOR_NOTE_LENGTH = 2000
+
+logger = logging.getLogger(__name__)
 
 
 def _sort_operator_notes(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -772,6 +775,8 @@ class AccountRepository:
         source: str | None = None,
         disposition_action: str | None = None,
         evidence: list[str] | None = None,
+        recheck_due_at: datetime | None = None,
+        reset_recheck_failures: bool = False,
     ) -> dict[str, Any]:
         with self.database.transaction() as session:
             assessment = session.get(AccountAssessment, account_id)
@@ -781,6 +786,10 @@ class AccountRepository:
             assessment.monitor_status = status
             assessment.manual_note = note
             assessment.quarantine_until = quarantine_until
+            if recheck_due_at is not None:
+                assessment.recheck_due_at = ensure_utc(recheck_due_at)
+            if reset_recheck_failures:
+                assessment.recheck_failures = 0
             if previous_upstream_enabled is not None:
                 assessment.previous_upstream_enabled = previous_upstream_enabled
             if disabled_by_monitor is not None:
@@ -947,6 +956,93 @@ class AccountRepository:
             ).all()
             return [_assessment_dict(value) for value in values]
 
+    def due_rechecks(self, *, limit: int) -> list[dict[str, Any]]:
+        """Return isolated accounts whose re-verification is now due.
+
+        ``recheck_due_at IS NULL`` is deliberately excluded: a NULL means the
+        account was isolated deliberately and must never be auto-revived, so
+        it is not a candidate for a real probe. The time window is persisted
+        per account, which is what spreads the load instead of a fixed cron.
+        """
+
+        capped = min(max(int(limit), 1), 500)
+        now = utc_now()
+        with self.database.session() as session:
+            values = session.scalars(
+                select(AccountAssessment).where(
+                    AccountAssessment.monitor_status == "quarantined",
+                    AccountAssessment.recheck_due_at.is_not(None),
+                    AccountAssessment.recheck_due_at <= now,
+                )
+                .order_by(AccountAssessment.recheck_due_at.asc())
+                .limit(capped)
+            ).all()
+            return [_assessment_dict(value) for value in values]
+
+    def schedule_recheck(self, account_id: int, *, due_at: datetime) -> None:
+        """Arm (or re-arm) one account's re-verification window."""
+
+        with self.database.transaction() as session:
+            assessment = session.get(AccountAssessment, account_id)
+            if assessment is None:
+                return
+            assessment.recheck_due_at = ensure_utc(due_at)
+            assessment.updated_at = utc_now()
+
+    def record_recheck_failure(self, account_id: int, *, due_at: datetime) -> int:
+        """Count a failed re-verification and space the next one out.
+
+        Returns the new consecutive-failure count. Repeatedly degraded
+        accounts get exponentially longer windows so a hopeless account stops
+        consuming probe capacity, while one that recovers revives promptly.
+        """
+
+        with self.database.transaction() as session:
+            assessment = session.get(AccountAssessment, account_id)
+            if assessment is None:
+                return 0
+            assessment.recheck_failures = int(assessment.recheck_failures or 0) + 1
+            assessment.recheck_due_at = ensure_utc(due_at)
+            assessment.updated_at = utc_now()
+            return int(assessment.recheck_failures)
+
+    def arm_unscheduled_rechecks(self, *, due_at: datetime) -> int:
+        """Give isolated accounts that predate re-verification a first due time.
+
+        ``recheck_due_at IS NULL`` means "never re-check", which is the right
+        meaning for an operator who isolated an account on purpose. It is also
+        the value every existing isolation already has, because the column is
+        new: arming them all would silently opt deliberate isolations into
+        automatic revival.
+
+        Only the isolation zone that an automatic source created is armed, and
+        only once. Manual isolations keep the NULL that keeps them out of the
+        re-check queue permanently.
+        """
+
+        with self.database.transaction() as session:
+            values = session.scalars(
+                select(AccountAssessment).where(
+                    AccountAssessment.monitor_status == "quarantined",
+                    AccountAssessment.recheck_due_at.is_(None),
+                )
+            ).all()
+            armed = 0
+            for assessment in values:
+                disposition = (
+                    assessment.disposition
+                    if isinstance(assessment.disposition, dict)
+                    else {}
+                )
+                source = str(disposition.get("source") or "")
+                if source in {"", "manual", "unknown"}:
+                    continue
+                assessment.recheck_due_at = ensure_utc(due_at)
+                armed += 1
+            if armed:
+                logger.info("armed %s legacy isolations for re-verification", armed)
+            return armed
+
     def mark_restored(self, account_id: int, *, recovery_guarded: bool) -> None:
         with self.database.transaction() as session:
             assessment = session.get(AccountAssessment, account_id)
@@ -957,6 +1053,13 @@ class AccountRepository:
             assessment.disabled_by_monitor = False
             assessment.previous_upstream_enabled = None
             assessment.recovery_guarded = recovery_guarded
+            # A revived account starts a fresh re-verification history: keeping
+            # the old count would immediately re-isolate it after one blip, and
+            # keeping the old due time would leave a healthy account in the
+            # re-check queue. It re-enters that queue only if it is isolated
+            # again.
+            assessment.recheck_failures = 0
+            assessment.recheck_due_at = None
             assessment.disposition = {}
             assessment.updated_at = utc_now()
 

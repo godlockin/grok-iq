@@ -39,6 +39,14 @@ COMPATIBILITY_COLUMNS = {
             "latest_upstream_tps",
             "ALTER TABLE account_assessments ADD COLUMN latest_upstream_tps FLOAT NOT NULL DEFAULT 0",
         ),
+        (
+            "recheck_due_at",
+            "ALTER TABLE account_assessments ADD COLUMN recheck_due_at DATETIME",
+        ),
+        (
+            "recheck_failures",
+            "ALTER TABLE account_assessments ADD COLUMN recheck_failures INTEGER NOT NULL DEFAULT 0",
+        ),
     ],
     "probe_profiles": [
         (
@@ -292,7 +300,12 @@ COMPATIBILITY_INDEXES = {
             "ix_account_assessments_recovery_guarded",
             "CREATE INDEX IF NOT EXISTS ix_account_assessments_recovery_guarded "
             "ON account_assessments (recovery_guarded)",
-        )
+        ),
+        (
+            "ix_account_assessments_recheck_due_at",
+            "CREATE INDEX IF NOT EXISTS ix_account_assessments_recheck_due_at "
+            "ON account_assessments (recheck_due_at)",
+        ),
     ],
     "probe_runs": [
         (

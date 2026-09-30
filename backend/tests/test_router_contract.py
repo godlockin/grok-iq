@@ -29,6 +29,7 @@ EXPECTED_ROUTES = {
     ("GET", "/api/accounts/selection"),
     ("GET", "/api/accounts/options"),
     ("POST", "/api/accounts/reconcile"),
+    ("POST", "/api/accounts/recheck"),
     ("PUT", "/api/accounts/batch"),
     ("POST", "/api/accounts/batch/action"),
     ("DELETE", "/api/accounts/batch"),

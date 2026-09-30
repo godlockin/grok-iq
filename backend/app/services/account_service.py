@@ -16,6 +16,7 @@ from app.persistence.request_audit_repository import RequestAuditRepository
 from app.persistence.sso_report_repository import SsoReportRepository
 from app.services.account_timeline import build_account_timeline
 from app.services.isolation_stats import compute_isolation_stats, resolve_stats_range
+from app.services.recheck_schedule import first_recheck_due_at
 
 QUARANTINE_RECOVERY_PRIORITY = -2_000_000_000
 PUBLIC_UPSTREAM_SUMMARY_TTL_SECONDS = 10.0
@@ -584,6 +585,10 @@ class AccountService:
 
         Manual isolation always applies. Automatic callers honor
         ``auto_isolation_enabled`` unless ``force=True``.
+
+        An operator isolating an account on purpose must not have it revived
+        behind their back, so a manual isolation is never scheduled for
+        re-verification. Every automatic source is.
         """
 
         normalized_account_id = int(account_id)
@@ -621,6 +626,7 @@ class AccountService:
         if previous_enabled is None:
             previous_enabled = was_enabled
         disabled_by_monitor = bool(assessment.get("disabled_by_monitor")) or was_enabled
+        normalized_source = str(source or "manual").strip() or "manual"
         isolated = self.accounts.set_manual_status(
             account_id=normalized_account_id,
             status="quarantined",
@@ -629,12 +635,15 @@ class AccountService:
             previous_upstream_enabled=bool(previous_enabled),
             disabled_by_monitor=disabled_by_monitor,
             recovery_guarded=False,
-            source=source or "manual",
+            source=normalized_source,
             disposition_action="isolate",
             evidence=evidence_from(detail=detail, assessment=assessment),
+            recheck_due_at=self._first_recheck_due_at(
+                automatic=normalized_source != "manual"
+            ),
+            reset_recheck_failures=True,
         )
         action_status = "disabled" if was_enabled else "already_disabled"
-        normalized_source = str(source or "manual").strip() or "manual"
         if normalized_source == "manual":
             alert_kind = "manual_isolate"
             severity = "warning"
@@ -742,6 +751,15 @@ class AccountService:
             source=source,
             disposition_action="isolate" if until is None else "quarantine",
             evidence=evidence_from(detail=detail, assessment=assessment),
+            # A permanent isolation would otherwise stay permanent forever, even
+            # when the upstream condition that caused it has since cleared. Only
+            # the time-based quarantine recovers on its own.
+            recheck_due_at=(
+                None
+                if until is not None
+                else self._first_recheck_due_at(automatic=source != "manual")
+            ),
+            reset_recheck_failures=True,
         )
         action_status = (
             "disabled"
@@ -1386,6 +1404,23 @@ class AccountService:
         return (
             str(value.get("monitor_status") or "") == "quarantined"
             and value.get("quarantine_until") is None
+        )
+
+    def _first_recheck_due_at(self, *, automatic: bool):
+        """First re-verification time for a newly isolated account.
+
+        ``None`` means "never re-check", which is the correct value for a
+        manual isolation and whenever re-verification is switched off. An
+        automatic isolation made while the feature was off is picked up by the
+        startup arming pass if the feature is enabled later.
+        """
+
+        if not automatic or not self.settings.quarantine_recheck_enabled:
+            return None
+        return first_recheck_due_at(
+            now=utc_now(),
+            min_minutes=self.settings.quarantine_recheck_minutes,
+            max_minutes=self.settings.quarantine_recheck_max_minutes,
         )
 
     @staticmethod

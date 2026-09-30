@@ -21,6 +21,10 @@ from app.persistence.register_event_repository import RegisterEventRepository
 from app.persistence.request_audit_repository import RequestAuditRepository
 from app.persistence.settings_repository import SettingsRepository
 from app.persistence.sso_report_repository import SsoReportRepository
+from app.services.account_recheck import (
+    RECHECK_RUN_PRIORITY,
+    AccountRecheckService,
+)
 from app.services.account_reconcile import AccountReconcileService
 from app.services.account_service import AccountService
 from app.services.auth_service import AuthService
@@ -111,6 +115,17 @@ account_reconcile_service = AccountReconcileService(
     client=grok_client,
     accounts=account_repository,
 )
+account_recheck_service = AccountRecheckService(
+    settings=settings,
+    accounts=account_repository,
+    probes=probe_repository,
+    account_service=account_service,
+    enqueue=lambda **kwargs: probe_manager.enqueue_recheck(
+        priority=RECHECK_RUN_PRIORITY, **kwargs
+    ),
+    thresholds=thresholds,
+)
+probe_manager.account_recheck = account_recheck_service
 scheduler_service = SchedulerService(
     settings=settings,
     repository=probe_repository,
@@ -119,6 +134,7 @@ scheduler_service = SchedulerService(
     request_audit_callback=request_audit_service.scan_scheduled,
     quality_retry_callback=quality_retry_isolation_service.scan,
     account_reconcile_callback=account_reconcile_service.reconcile,
+    account_recheck_callback=account_recheck_service.scan,
 )
 register_integration_service = RegisterIntegrationService(
     settings=settings,
@@ -147,6 +163,7 @@ async def lifespan(_: FastAPI):
     await probe_manager.reconfigure()
     probe_repository.reconcile_sample_metrics_from_request_audits()
     probe_repository.backfill_probe_upstream_tps()
+    account_recheck_service.arm_existing_isolations()
     # Recompute classifications even when audit metrics were already copied.
     # Older samples can retain a classification produced from the local stream
     # clock, while their persisted TPS now reflects grok2api's authoritative
@@ -217,6 +234,7 @@ app.include_router(
         updates=update_check_service,
         keepalive=keepalive_service,
         account_reconcile=account_reconcile_service,
+        account_recheck=account_recheck_service,
     )
 )
 

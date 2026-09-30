@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.services.account_recheck import AccountRecheckService
 from app.services.account_reconcile import AccountReconcileService
 from app.services.account_service import AccountService
 from app.web.schemas import (
@@ -19,6 +20,7 @@ from app.web.schemas import (
 def build_accounts_router(
     service: AccountService,
     reconcile: AccountReconcileService | None = None,
+    recheck: AccountRecheckService | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -33,6 +35,18 @@ def build_accounts_router(
         if reconcile is None:
             raise HTTPException(status_code=503, detail="账号对账未启用")
         return await reconcile.reconcile()
+
+    @router.post("/accounts/recheck")
+    async def recheck_accounts() -> dict[str, Any]:
+        """Queue real re-verification probes for due isolated accounts.
+
+        Runs on a schedule already; exposed so an operator can force a pass
+        after a suspected upstream recovery instead of waiting for the window.
+        """
+
+        if recheck is None:
+            raise HTTPException(status_code=503, detail="隔离账号复检未启用")
+        return await recheck.scan()
 
     @router.get("/dashboard")
     async def dashboard(

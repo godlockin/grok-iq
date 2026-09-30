@@ -329,6 +329,11 @@ class RuntimeSettingsService:
                 s.quality_retry_isolation_interval_seconds
             ),
             "quarantineMinutes": s.quarantine_minutes,
+            "quarantineRecheckEnabled": s.quarantine_recheck_enabled,
+            "quarantineRecheckMinMinutes": s.quarantine_recheck_minutes,
+            "quarantineRecheckMaxMinutes": s.quarantine_recheck_max_minutes,
+            "quarantineRecheckBatch": s.quarantine_recheck_batch,
+            "quarantineRecheckProfileIds": s.quarantine_recheck_profile_ids,
             "keepaliveEnabled": s.keepalive_enabled,
             "keepaliveMinIntervalSeconds": s.keepalive_min_interval_seconds,
             "keepaliveMaxIntervalSeconds": s.keepalive_max_interval_seconds,

@@ -139,6 +139,17 @@ class Settings(BaseSettings):
     scheduler_timezone: str = "UTC"
     scheduler_misfire_grace_seconds: int = Field(default=300, ge=1, le=86_400)
     recovery_cron: str = "*/5 * * * *"
+    # Quarantined accounts are re-verified with a real probe after this delay
+    # instead of staying locked forever. A probe that answers correctly with
+    # healthy throughput revives the account; one that still degrades keeps it
+    # isolated. The extra jitter spreads the re-verification load.
+    quarantine_recheck_enabled: bool = True
+    quarantine_recheck_minutes: int = Field(default=120, ge=5, le=7 * 24 * 60)
+    quarantine_recheck_max_minutes: int = Field(default=360, ge=5, le=7 * 24 * 60)
+    quarantine_recheck_batch: int = Field(default=10, ge=1, le=200)
+    quarantine_recheck_profile_ids: list[str] = Field(
+        default_factory=lambda: ["quality-marker"]
+    )
     # grok2api owns the account list. GrokIQ keys its verdict on a bare integer
     # with no foreign key, so an account deleted upstream leaves an
     # unreachable row behind and every operator action on it fails with 404.
@@ -302,6 +313,11 @@ class Settings(BaseSettings):
         "scheduler_timezone",
         "scheduler_misfire_grace_seconds",
         "recovery_cron",
+        "quarantine_recheck_enabled",
+        "quarantine_recheck_minutes",
+        "quarantine_recheck_max_minutes",
+        "quarantine_recheck_batch",
+        "quarantine_recheck_profile_ids",
         "account_reconcile_enabled",
         "account_reconcile_cron",
         "scheduled_probe_register_cooldown_minutes",

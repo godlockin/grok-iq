@@ -6,6 +6,7 @@ from app.core.config import Settings
 from app.integrations.grok2api.client import Grok2APIClient
 from app.persistence.account_repository import AccountRepository
 from app.persistence.probe_repository import ProbeRepository
+from app.services.account_recheck import AccountRecheckService
 from app.services.account_reconcile import AccountReconcileService
 from app.services.account_service import AccountService
 from app.services.auth_service import AuthService
@@ -61,6 +62,7 @@ def build_router(
     updates: UpdateCheckService,
     keepalive: KeepAliveService | None = None,
     account_reconcile: AccountReconcileService | None = None,
+    account_recheck: AccountRecheckService | None = None,
     request_audits: RequestAuditService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
@@ -82,7 +84,9 @@ def build_router(
         build_integrations_router(settings, register_integration)
     )
 
-    protected.include_router(build_accounts_router(account_service, account_reconcile))
+    protected.include_router(
+        build_accounts_router(account_service, account_reconcile, account_recheck)
+    )
     protected.include_router(
         build_exports_router(
             ExportService(

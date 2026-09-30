@@ -19,6 +19,7 @@ from .probe_manager import ProbeManager
 RequestAuditCallback = Callable[[], Awaitable[dict[str, Any]]]
 QualityRetryCallback = Callable[[], Awaitable[dict[str, Any]]]
 AccountReconcileCallback = Callable[[], Awaitable[dict[str, Any]]]
+AccountRecheckCallback = Callable[[], Awaitable[dict[str, Any]]]
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class SchedulerService:
         request_audit_callback: RequestAuditCallback | None = None,
         quality_retry_callback: QualityRetryCallback | None = None,
         account_reconcile_callback: AccountReconcileCallback | None = None,
+        account_recheck_callback: AccountRecheckCallback | None = None,
     ):
         self.settings = settings
         self.repository = repository
@@ -42,6 +44,7 @@ class SchedulerService:
         self.request_audit_callback = request_audit_callback
         self.quality_retry_callback = quality_retry_callback
         self.account_reconcile_callback = account_reconcile_callback
+        self.account_recheck_callback = account_recheck_callback
         self.scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone)
 
     async def start(self) -> None:
@@ -114,6 +117,11 @@ class SchedulerService:
             self._schedule_request_audit(5)
         if self._quality_retry_schedule_enabled():
             self._schedule_quality_retry(5)
+        if self._account_recheck_schedule_enabled():
+            # Re-verification is a one-shot timer, not a cron: each account
+            # carries its own randomized due time, and this job only drains the
+            # accounts that have come due since the last pass.
+            self._schedule_account_recheck(10)
 
     def _request_audit_schedule_enabled(self) -> bool:
         return bool(
@@ -133,6 +141,47 @@ class SchedulerService:
         return max(
             15,
             min(int(self.settings.quality_retry_isolation_interval_seconds), 600),
+        )
+
+    def _account_recheck_schedule_enabled(self) -> bool:
+        return bool(
+            self.settings.scheduler_enabled
+            and self.settings.quarantine_recheck_enabled
+            and self.account_recheck_callback is not None
+        )
+
+    def _account_recheck_delay(self) -> int:
+        """Seconds until the next drain of the due-recheck queue.
+
+        This is the smallest configured re-check window, because a due account
+        must not wait longer than its own earliest possible schedule. A larger
+        interval would silently coarsen every account's window, and a shorter
+        one would only re-query an empty queue. The 60s floor keeps the job from
+        becoming a busy loop under a very small configured window.
+        """
+
+        smallest = min(
+            max(int(self.settings.quarantine_recheck_minutes), 1),
+            max(int(self.settings.quarantine_recheck_max_minutes), 1),
+        )
+        return max(60, min(smallest * 60, 24 * 60 * 60))
+
+    def _schedule_account_recheck(self, delay_seconds: int) -> None:
+        if not self.scheduler.running or not self._account_recheck_schedule_enabled():
+            return
+        delay = max(30, min(int(delay_seconds), 24 * 60 * 60))
+        self.scheduler.add_job(
+            self._run_account_recheck,
+            DateTrigger(
+                run_date=utc_now() + timedelta(seconds=delay),
+                timezone=ZoneInfo(self.settings.scheduler_timezone),
+            ),
+            id="system:account-recheck",
+            name="隔离账号复检与复活",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=self.settings.scheduler_misfire_grace_seconds,
         )
 
     def _schedule_request_audit(self, delay_seconds: int) -> None:
@@ -416,6 +465,47 @@ class SchedulerService:
         finally:
             self._schedule_quality_retry(self._quality_retry_delay())
 
+    async def _run_account_recheck(self) -> None:
+        if self.account_recheck_callback is None:
+            return
+        execution_id = self.repository.start_schedule_execution(
+            "system:account-recheck"
+        )
+        result: dict[str, Any] = {}
+        try:
+            result = await self.account_recheck_callback()
+            skipped = bool(result.get("skipped"))
+            if skipped:
+                status = "skipped"
+                message = str(result.get("reason") or "隔离账号复检已跳过")
+            else:
+                status = "succeeded" if bool(result.get("ok", True)) else "failed"
+                candidates = int(result.get("candidates") or 0)
+                enqueued = int(result.get("enqueued") or 0)
+                skipped_count = int(result.get("skippedCount") or 0)
+                if candidates == 0:
+                    message = "没有到期的隔离账号"
+                else:
+                    message = f"到期 {candidates} 个，复检 {enqueued} 个"
+                    if skipped_count:
+                        message += f"，跳过 {skipped_count} 个"
+            self.repository.finish_schedule_execution(
+                execution_id,
+                status=status,
+                message=message,
+                detail=result,
+            )
+        except Exception as exc:
+            self.repository.finish_schedule_execution(
+                execution_id,
+                status="failed",
+                message=str(exc),
+                detail={},
+            )
+            logger.exception("account recheck scan failed")
+        finally:
+            self._schedule_account_recheck(self._account_recheck_delay())
+
     def status(self) -> dict[str, Any]:
         jobs = {
             job.id: {
@@ -435,6 +525,7 @@ class SchedulerService:
             "qualityRetryIsolationEnabled": (
                 self.settings.quality_retry_isolation_enabled
             ),
+            "accountRecheckEnabled": self._account_recheck_schedule_enabled(),
             "running": self.scheduler.running,
             "plans": plans,
             "systemJobs": [value for key, value in jobs.items() if key.startswith("system:")],

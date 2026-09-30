@@ -1086,10 +1086,24 @@ class RequestAuditService:
         evaluations: dict[str, AuditRiskEvaluation] | None = None,
     ) -> set[int]:
         boundary = ensure_utc(discovered_after) or utc_now()
+        # GrokIQ's own probe traffic is deliberately excluded. A probe request
+        # is generated to measure an account, so treating its throughput as
+        # independent evidence would let a probe quarantine the very account it
+        # was measuring. In production this re-isolated account 106 seconds
+        # after a re-verification probe had correctly cleared it.
+        probe_audit_ids = self.probes.probe_audit_ids(
+            {
+                _positive_int(row.get("upstream_id")) or 0
+                for row in records
+            }
+        ) if self.probes is not None else set()
         result: set[int] = set()
         for row in records:
             account_id = _positive_int(row.get("account_id"))
             if account_id is None:
+                continue
+            upstream_id = _positive_int(row.get("upstream_id"))
+            if upstream_id is not None and upstream_id in probe_audit_ids:
                 continue
             fetched_at = ensure_utc(row.get("fetched_at"))
             if fetched_at is None or fetched_at <= boundary:

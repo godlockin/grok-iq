@@ -87,6 +87,12 @@ class AccountAssessment(Base):
     last_anomaly_at: Mapped[datetime | None] = mapped_column(AppDateTime())
     risk_reasons: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     quarantine_until: Mapped[datetime | None] = mapped_column(AppDateTime(), index=True)
+    # When a quarantined account should next be re-verified with a real probe.
+    # NULL means "never re-check", which is what a manual isolation means.
+    recheck_due_at: Mapped[datetime | None] = mapped_column(AppDateTime(), index=True)
+    # Consecutive re-verification rounds the account has failed to recover, so a
+    # repeatedly degraded account can be spaced out instead of probed forever.
+    recheck_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     disabled_by_monitor: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     previous_upstream_enabled: Mapped[bool | None] = mapped_column(Boolean)
     recovery_guarded: Mapped[bool] = mapped_column(

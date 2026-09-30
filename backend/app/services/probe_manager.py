@@ -38,6 +38,7 @@ from app.services.probe_run_executor import ProbeRunExecutor
 from app.services.probe_runtime import AccountRestoreError, WorkerRuntime
 from app.services.probe_target_validator import ProbeTargetValidator
 from app.services.probe_worker_loop import ProbeWorkerLoop
+from app.services.recheck_schedule import first_recheck_due_at
 from app.services.wechat_notification import WeChatAccountNotificationService
 
 if TYPE_CHECKING:
@@ -102,6 +103,10 @@ class ProbeManager:
             wake=self._wake,
         )
         self.register_integration = None
+        # Set by application composition. The re-verification service needs
+        # this manager to enqueue probes, and this manager needs the service to
+        # settle a verdict, so the edge is wired from the outside.
+        self.account_recheck = None
 
     async def start(self) -> None:
         if self._started:
@@ -313,6 +318,53 @@ class ProbeManager:
 
     async def enqueue_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
         return await self._plan_enqueuer.enqueue(plan)
+
+    async def enqueue_recheck(
+        self,
+        *,
+        account_id: int,
+        profile_id: str,
+        rounds: int,
+        proxy_targets: list[dict[str, Any]],
+        execution_mode: str = "chat",
+        priority: int = 100,
+    ) -> str | None:
+        """Queue one GrokIQ-owned re-verification probe.
+
+        Returns the run ID, or ``None`` when the account cannot be probed
+        right now (already covered by an active run, or a settings restore is
+        still pending). Callers treat ``None`` as "try again later" rather
+        than as evidence about the account.
+
+        ``create_run`` is used instead of the manual batch writer because the
+        trigger must be ``recheck``: it marks the run as automatic so the
+        operator task list does not present GrokIQ's own housekeeping as a
+        manual request, and it lets the verdict be applied after the run.
+        """
+
+        self._ensure_account_restore_ready(account_id)
+        if self.repository.has_active_run(account_id=account_id):
+            return None
+        account = await self.client.get_account(account_id)
+        self._validate_account_for_targets(account, proxy_targets)
+        targets = await self.validate_targets(proxy_targets, execution_mode=execution_mode)
+        self._validate_account_for_targets(account, targets)
+        async with self._enqueue_lock:
+            run_id = self.repository.create_run(
+                account_id=account_id,
+                account_name=str(account.get("name") or f"account-{account_id}"),
+                account_email=str(account.get("email") or ""),
+                account_created_at=account_created_at(account),
+                profile_id=profile_id,
+                execution_mode=execution_mode,
+                rounds=rounds,
+                proxy_targets=targets,
+                trigger="recheck",
+                priority=int(priority),
+                queue_limit=self.settings.probe_queue_limit,
+            )
+        self._wake.set()
+        return run_id
 
     async def retry(self, run_id: str) -> str:
         values = self.repository.retry_values(run_id)
@@ -1053,6 +1105,12 @@ class ProbeManager:
             recovery_guarded=False,
             source="probe",
             evidence=list(assessment.get("risk_reasons") or []),
+            recheck_due_at=None if until is not None else first_recheck_due_at(
+                now=utc_now(),
+                min_minutes=self.settings.quarantine_recheck_minutes,
+                max_minutes=self.settings.quarantine_recheck_max_minutes,
+            ),
+            reset_recheck_failures=True,
         )
         self.accounts.create_alert(
             account_id=account_id,
@@ -1091,6 +1149,12 @@ class ProbeManager:
             source="probe",
             disposition_action="isolate",
             evidence=list(assessment.get("risk_reasons") or []),
+            recheck_due_at=first_recheck_due_at(
+                now=utc_now(),
+                min_minutes=self.settings.quarantine_recheck_minutes,
+                max_minutes=self.settings.quarantine_recheck_max_minutes,
+            ),
+            reset_recheck_failures=True,
         )
         self.accounts.create_alert(
             account_id=account_id,

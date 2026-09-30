@@ -589,6 +589,21 @@ class RuntimeSettingsInput(BaseModel):
         le=600,
     )
     quarantine_minutes: int | None = Field(default=None, alias="quarantineMinutes", ge=1, le=7 * 24 * 60)
+    quarantine_recheck_enabled: bool | None = Field(
+        default=None, alias="quarantineRecheckEnabled"
+    )
+    quarantine_recheck_minutes: int | None = Field(
+        default=None, alias="quarantineRecheckMinMinutes", ge=5, le=7 * 24 * 60
+    )
+    quarantine_recheck_max_minutes: int | None = Field(
+        default=None, alias="quarantineRecheckMaxMinutes", ge=5, le=7 * 24 * 60
+    )
+    quarantine_recheck_batch: int | None = Field(
+        default=None, alias="quarantineRecheckBatch", ge=1, le=200
+    )
+    quarantine_recheck_profile_ids: list[str] | None = Field(
+        default=None, alias="quarantineRecheckProfileIds"
+    )
     keepalive_enabled: bool | None = Field(default=None, alias="keepaliveEnabled")
     keepalive_min_interval_seconds: int | None = Field(
         default=None, alias="keepaliveMinIntervalSeconds", ge=60, le=7 * 24 * 3600

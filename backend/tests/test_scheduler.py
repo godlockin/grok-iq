@@ -130,6 +130,112 @@ async def test_quality_retry_isolation_runs_when_user_plans_are_disabled(
         await scheduler.stop()
 
 
+@pytest.mark.asyncio
+async def test_account_recheck_is_scheduled_with_a_callback(tmp_path: Path):
+    repository = build_repository(tmp_path)
+    settings = Settings(
+        database_path=tmp_path / "grokiq.db",
+        quarantine_recheck_enabled=True,
+        quarantine_recheck_minutes=120,
+        quarantine_recheck_max_minutes=360,
+    )
+    scheduler = SchedulerService(
+        settings=settings,
+        repository=repository,
+        probes=AsyncMock(),  # type: ignore[arg-type]
+        recovery_callback=AsyncMock(return_value={"restored": 0, "guarded": 0}),
+        account_recheck_callback=AsyncMock(return_value={"ok": True, "enqueued": 0}),
+    )
+
+    await scheduler.start()
+    try:
+        assert "system:account-recheck" in {
+            job.id for job in scheduler.scheduler.get_jobs()
+        }
+        assert scheduler.status()["accountRecheckEnabled"] is True
+    finally:
+        await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_account_recheck_is_not_scheduled_when_disabled(tmp_path: Path):
+    repository = build_repository(tmp_path)
+    settings = Settings(
+        database_path=tmp_path / "grokiq.db",
+        quarantine_recheck_enabled=False,
+    )
+    scheduler = SchedulerService(
+        settings=settings,
+        repository=repository,
+        probes=AsyncMock(),  # type: ignore[arg-type]
+        recovery_callback=AsyncMock(return_value={"restored": 0, "guarded": 0}),
+        account_recheck_callback=AsyncMock(return_value={"ok": True}),
+    )
+
+    await scheduler.start()
+    try:
+        assert "system:account-recheck" not in {
+            job.id for job in scheduler.scheduler.get_jobs()
+        }
+        assert scheduler.status()["accountRecheckEnabled"] is False
+    finally:
+        await scheduler.stop()
+
+
+def test_account_recheck_delay_tracks_the_smallest_window(tmp_path: Path):
+    """The drain interval must not exceed an account's earliest possible due time."""
+
+    settings = Settings(
+        database_path=tmp_path / "grokiq.db",
+        quarantine_recheck_minutes=120,
+        quarantine_recheck_max_minutes=360,
+    )
+    scheduler = SchedulerService(
+        settings=settings,
+        repository=build_repository(tmp_path),
+        probes=AsyncMock(),  # type: ignore[arg-type]
+        recovery_callback=AsyncMock(return_value={}),
+    )
+    assert scheduler._account_recheck_delay() == 120 * 60
+
+    settings.quarantine_recheck_minutes = 30
+    assert scheduler._account_recheck_delay() == 30 * 60
+    # A floor keeps a very short window from turning this into a busy loop.
+    settings.quarantine_recheck_minutes = 0
+    assert scheduler._account_recheck_delay() == 60
+
+
+@pytest.mark.asyncio
+async def test_account_recheck_records_a_schedule_execution(tmp_path: Path):
+    repository = build_repository(tmp_path)
+    settings = Settings(
+        database_path=tmp_path / "grokiq.db",
+        quarantine_recheck_enabled=True,
+    )
+    callback = AsyncMock(
+        return_value={"ok": True, "candidates": 3, "enqueued": 2, "skippedCount": 1}
+    )
+    scheduler = SchedulerService(
+        settings=settings,
+        repository=repository,
+        probes=AsyncMock(),  # type: ignore[arg-type]
+        recovery_callback=AsyncMock(return_value={}),
+        account_recheck_callback=callback,
+    )
+
+    await scheduler.start()
+    try:
+        await scheduler._run_account_recheck()
+        executions = repository.list_schedule_executions(limit=10)
+        record = next(
+            item for item in executions if item["schedule_key"] == "system:account-recheck"
+        )
+        assert record["status"] == "succeeded"
+        assert "到期 3 个" in record["message"]
+    finally:
+        await scheduler.stop()
+
+
 class DynamicAccountClient:
     async def list_all_accounts(self) -> list[dict[str, Any]]:
         return [

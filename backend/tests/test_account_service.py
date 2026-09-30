@@ -596,6 +596,9 @@ def _isolation_service(
     auto_isolation_min_status: str = "high_risk",
     auto_quarantine: bool = False,
     probes: ProbeRepository | LockedProbeSettings | None = None,
+    quarantine_recheck_enabled: bool = True,
+    quarantine_recheck_minutes: int = 120,
+    quarantine_recheck_max_minutes: int = 360,
 ) -> tuple[
     Database,
     AccountRepository,
@@ -633,6 +636,9 @@ def _isolation_service(
             auto_quarantine=auto_quarantine,
             auto_quarantine_recovery_enabled=True,
             quarantine_minutes=30,
+            quarantine_recheck_enabled=quarantine_recheck_enabled,
+            quarantine_recheck_minutes=quarantine_recheck_minutes,
+            quarantine_recheck_max_minutes=quarantine_recheck_max_minutes,
         ),
         client=isolation_client,  # type: ignore[arg-type]
         accounts=accounts,
@@ -1005,6 +1011,107 @@ async def test_isolation_zone_orders_by_isolated_at_newest_first(tmp_path: Path)
 
     page = await service.list_isolation_zone(page=1, page_size=50)
     assert [int(item["id"]) for item in page["items"]] == [1, 99]
+
+
+@pytest.mark.asyncio
+async def test_automatic_isolation_schedules_a_recheck(tmp_path: Path):
+    """A permanent isolation must not be permanent forever.
+
+    Without a due time the account would never be re-probed, and the whole
+    recovery loop would only ever apply to rows that already had one.
+    """
+
+    database, accounts, _probes, _client, service = _isolation_service(
+        tmp_path, auto_isolation_enabled=True
+    )
+
+    await service.isolate_account(
+        1, note="自动隔离", source="probe", automatic=True, force=True
+    )
+
+    stored = accounts.get_assessment(1)
+    assert stored is not None
+    assert stored["quarantine_until"] is None
+    assert stored["recheck_due_at"] is not None
+    assert stored["recheck_due_at"] > utc_now()
+    assert accounts.due_rechecks(limit=10) == []
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_manual_isolation_is_not_scheduled_for_recheck(tmp_path: Path):
+    """An operator's deliberate isolation must not be auto-revived."""
+
+    database, accounts, _probes, _client, service = _isolation_service(tmp_path)
+
+    await service.isolate_account(1, note="人工隔离", source="manual")
+
+    stored = accounts.get_assessment(1)
+    assert stored is not None
+    assert stored["quarantine_until"] is None
+    assert stored["recheck_due_at"] is None
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_isolation_without_recheck_enabled_schedules_nothing(tmp_path: Path):
+    database, accounts, _probes, _client, service = _isolation_service(
+        tmp_path, auto_isolation_enabled=True, quarantine_recheck_enabled=False
+    )
+
+    await service.isolate_account(
+        1, note="自动隔离", source="probe", automatic=True, force=True
+    )
+
+    stored = accounts.get_assessment(1)
+    assert stored is not None
+    assert stored["recheck_due_at"] is None
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_temporary_quarantine_is_not_double_managed(tmp_path: Path):
+    """A time-based quarantine already recovers; a recheck would race it."""
+
+    database, accounts, _probes, _client, service = _isolation_service(
+        tmp_path, auto_quarantine=True
+    )
+
+    await service.apply_auto_quarantine(
+        1, source="probe", note="临时停用", risk_score=90.0, force=True
+    )
+
+    stored = accounts.get_assessment(1)
+    assert stored is not None
+    assert stored["quarantine_until"] is not None
+    assert stored["recheck_due_at"] is None
+    database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recheck_failure_counter_resets_on_reisolation(tmp_path: Path):
+    database, accounts, _probes, _client, service = _isolation_service(
+        tmp_path, auto_isolation_enabled=True
+    )
+    with database.transaction() as session:
+        session.add(
+            AccountAssessment(
+                account_id=1,
+                monitor_status="quarantined",
+                quarantine_until=None,
+                recheck_failures=5,
+                recheck_due_at=utc_now() - timedelta(hours=1),
+            )
+        )
+
+    await service.isolate_account(
+        1, note="再次隔离", source="probe", automatic=True, force=True
+    )
+
+    stored = accounts.get_assessment(1)
+    assert stored is not None
+    assert stored["recheck_failures"] == 0
+    database.dispose()
 
 
 @pytest.mark.asyncio

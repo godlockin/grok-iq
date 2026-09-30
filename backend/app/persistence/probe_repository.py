@@ -1436,6 +1436,32 @@ class ProbeRepository:
             include_response=include_response,
         )
 
+    def probe_audit_ids(self, audit_ids: list[int] | set[int]) -> set[int]:
+        """Return the subset of ``audit_ids`` produced by GrokIQ's own probes.
+
+        A probe request reaches grok2api and lands in the same audit ledger as
+        real user traffic, so the request-audit scanner sees it. Its evidence is
+        not independent: it was generated deliberately, to measure the account,
+        and must never be able to quarantine that same account. Without this
+        filter a re-verification probe could re-isolate the account it just
+        cleared, which is a self-defeating loop.
+        """
+
+        normalized = {
+            int(value) for value in audit_ids if int(value or 0) > 0
+        }
+        if not normalized:
+            return set()
+        with self.database.session() as session:
+            return set(
+                session.scalars(
+                    select(ProbeSample.audit_id).where(
+                        ProbeSample.audit_id.in_(normalized),
+                        ProbeSample.audit_id.is_not(None),
+                    )
+                ).all()
+            )
+
     def persist_account_created_at(self, values: dict[int, datetime | None]) -> None:
         updates = {
             account_id: created_at

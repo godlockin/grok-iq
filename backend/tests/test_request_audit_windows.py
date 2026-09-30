@@ -115,6 +115,101 @@ def test_media_input_observe_does_not_auto_disable_for_reasoning_zero():
     assert candidates == []
 
 
+def test_grokiq_own_probe_request_cannot_trigger_a_quarantine():
+    """A probe measures an account; it must not be able to condemn it.
+
+    In production a re-verification probe returned the marker but ran at 958
+    TPS, and the request-audit scanner classified that as ``fast_risk`` and
+    re-isolated account 106 fourteen seconds after the re-verification had
+    correctly cleared it. The probe's own audit must therefore be invisible to
+    the mutation path.
+    """
+
+    probes = MagicMock()
+    probes.probe_audit_ids.return_value = {4}
+    service = RequestAuditService(
+        settings=Settings(_env_file=None),
+        client=MagicMock(),
+        repository=MagicMock(),
+        probes=probes,
+    )
+    now = utc_now()
+    # Only one high-risk row, and it is the probe's own audit.
+    records = [
+        {
+            "upstream_id": "4",
+            "account_id": 7,
+            "status_code": 200,
+            "output_tokens": 1500,
+            "reasoning_tokens": 1499,
+            "reasoning_tokens_reported": True,
+            "first_token_ms": 100,
+            "duration_ms": 2000,
+            "tps": 900,
+            "model_upstream_model": "Build/grok-4.6",
+            "model_public_id": "grok-4.6",
+            "operation": "chat",
+            "media_input_images": 0,
+            "fetched_at": now,
+            "created_at": now,
+        }
+    ]
+    evaluations = service._audit_risk_evaluations(records)
+
+    assert evaluations["4"].classification.name == "high"
+
+    trigger = service._new_risk_account_ids(
+        records,
+        discovered_after=now - timedelta(minutes=5),
+        evaluations=evaluations,
+    )
+
+    assert trigger == set()
+
+
+def test_real_user_traffic_still_triggers_a_quarantine():
+    """The probe filter must not weaken protection against genuine traffic."""
+
+    probes = MagicMock()
+    probes.probe_audit_ids.return_value = {999}
+    service = RequestAuditService(
+        settings=Settings(_env_file=None),
+        client=MagicMock(),
+        repository=MagicMock(),
+        probes=probes,
+    )
+    now = utc_now()
+    records = [
+        {
+            "upstream_id": str(index),
+            "account_id": 7,
+            "status_code": 200,
+            "output_tokens": 1500,
+            "reasoning_tokens": 0,
+            "reasoning_tokens_reported": True,
+            "first_token_ms": 100,
+            "duration_ms": 2000,
+            "tps": 900,
+            "model_upstream_model": "Build/grok-4.6",
+            "model_public_id": "grok-4.6",
+            "operation": "chat",
+            "media_input_images": 0,
+            "fetched_at": now,
+            "created_at": now,
+        }
+        for index in (1, 2, 3, 4)
+    ]
+    evaluations = service._audit_risk_evaluations(records)
+
+    trigger = service._new_risk_account_ids(
+        records,
+        discovered_after=now - timedelta(minutes=5),
+        evaluations=evaluations,
+    )
+
+    assert trigger == {7}
+
+
 def _audit_records(*, operation: str, images: int, tps: float, count: int = 4):
     now = utc_now()
     return [

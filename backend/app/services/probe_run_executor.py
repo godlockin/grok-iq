@@ -631,3 +631,39 @@ class ProbeRunExecutor:
                         run_id,
                         account_id,
                     )
+        if str(run.get("trigger") or "") == "recheck":
+            await self._settle_recheck(run, account_id, run_id)
+
+    async def _settle_recheck(
+        self,
+        run: dict[str, Any],
+        account_id: int,
+        run_id: str,
+    ) -> None:
+        """Apply a re-verification verdict to the account's isolation state.
+
+        This runs after the ordinary post-processing, and only for the
+        ``recheck`` trigger, so a normal scheduled probe can never revive an
+        isolated account. A failure here is logged and swallowed: the run's
+        evidence is already stored, and losing the verdict must not fail the
+        worker.
+        """
+
+        manager = self.manager
+        service = getattr(manager, "account_recheck", None)
+        if service is None:
+            return
+        try:
+            result = await service.settle(account_id=account_id, run_id=run_id)
+        except Exception:
+            self.logger.exception(
+                "recheck verdict failed run=%s account=%s", run_id, account_id
+            )
+            return
+        self.logger.info(
+            "recheck verdict run=%s account=%s outcome=%s reason=%s",
+            run_id,
+            account_id,
+            result.get("outcome"),
+            result.get("reason"),
+        )
