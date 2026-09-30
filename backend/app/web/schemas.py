@@ -395,6 +395,12 @@ class RuntimeSettingsInput(BaseModel):
         default=None, alias="schedulerMisfireGraceSeconds", ge=1, le=86_400
     )
     recovery_cron: str | None = Field(default=None, alias="recoveryCron")
+    account_reconcile_enabled: bool | None = Field(
+        default=None, alias="accountReconcileEnabled"
+    )
+    account_reconcile_cron: str | None = Field(
+        default=None, alias="accountReconcileCron"
+    )
     scheduled_probe_register_cooldown_minutes: int | None = Field(
         default=None,
         alias="scheduledProbeRegisterCooldownMinutes",

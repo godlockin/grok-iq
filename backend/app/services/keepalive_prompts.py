@@ -16,7 +16,6 @@ from __future__ import annotations
 import random
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 # Each entry is a self-contained task. The answer is intentionally short so the
 # upstream does not spend extra generation time or output tokens per keep-alive.
@@ -94,7 +93,9 @@ class KeepAlivePrompt:
     max_output_tokens: int
 
 
-def render_prompt(rng: random.Random, *, max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS) -> KeepAlivePrompt:
+def render_prompt(
+    rng: random.Random, *, max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
+) -> KeepAlivePrompt:
     """Draw one randomized keep-alive request.
 
     ``rng`` is injected rather than using the module-level generator so tests

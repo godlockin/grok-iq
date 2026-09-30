@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
+from app.services.account_reconcile import AccountReconcileService
 from app.services.account_service import AccountService
 from app.web.schemas import (
     AccountActionInput,
@@ -15,8 +16,23 @@ from app.web.schemas import (
 )
 
 
-def build_accounts_router(service: AccountService) -> APIRouter:
+def build_accounts_router(
+    service: AccountService,
+    reconcile: AccountReconcileService | None = None,
+) -> APIRouter:
     router = APIRouter()
+
+    @router.post("/accounts/reconcile")
+    async def reconcile_accounts() -> dict[str, Any]:
+        """Delete verdicts for accounts that no longer exist in grok2api.
+
+        Runs on a schedule already; exposed so an operator can force a pass
+        after a bulk upstream delete.
+        """
+
+        if reconcile is None:
+            raise HTTPException(status_code=503, detail="账号对账未启用")
+        return await reconcile.reconcile()
 
     @router.get("/dashboard")
     async def dashboard(

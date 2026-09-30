@@ -296,6 +296,50 @@ class AccountRepository:
         items.sort(key=_isolation_sort_key, reverse=True)
         return items
 
+    def ghost_account_ids(self, live_account_ids: set[int]) -> list[int]:
+        """Return assessed account IDs that no longer exist upstream.
+
+        ``account_assessments.account_id`` is a plain integer column with no
+        foreign key, so deleting an account in grok2api leaves GrokIQ holding a
+        verdict for an account that cannot be reached. Every operator action
+        against such a row then fails with 404.
+        """
+
+        if not live_account_ids:
+            # An empty upstream list means the listing failed upstream. Treating
+            # it as "everything is a ghost" would wipe the whole verdict table.
+            return []
+        with self.database.session() as session:
+            known = set(
+                session.scalars(select(AccountAssessment.account_id)).all()
+            )
+        return sorted(known - set(live_account_ids))
+
+    def purge_accounts(self, account_ids: list[int]) -> int:
+        """Delete GrokIQ-owned rows for accounts that are gone upstream.
+
+        Probe samples and request-audit rows are intentionally kept: they are
+        historical evidence used for trend analysis and are never presented as a
+        live account. Only the current verdict, its alerts, and its operator
+        notes describe state that no longer exists.
+        """
+
+        if not account_ids:
+            return 0
+        with self.database.transaction() as session:
+            removed = int(
+                session.execute(
+                    delete(AccountAssessment).where(
+                        AccountAssessment.account_id.in_(account_ids)
+                    )
+                ).rowcount
+                or 0
+            )
+            session.execute(
+                delete(Alert).where(Alert.account_id.in_(account_ids))
+            )
+        return removed
+
     def migrate_fixed_egress_risk_formula(
         self,
         thresholds: Thresholds,

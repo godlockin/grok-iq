@@ -139,6 +139,11 @@ class Settings(BaseSettings):
     scheduler_timezone: str = "UTC"
     scheduler_misfire_grace_seconds: int = Field(default=300, ge=1, le=86_400)
     recovery_cron: str = "*/5 * * * *"
+    # grok2api owns the account list. GrokIQ keys its verdict on a bare integer
+    # with no foreign key, so an account deleted upstream leaves an
+    # unreachable row behind and every operator action on it fails with 404.
+    account_reconcile_enabled: bool = True
+    account_reconcile_cron: str = "*/30 * * * *"
     scheduled_probe_register_cooldown_minutes: int = Field(
         default=360, ge=0, le=7 * 24 * 60
     )
@@ -297,6 +302,8 @@ class Settings(BaseSettings):
         "scheduler_timezone",
         "scheduler_misfire_grace_seconds",
         "recovery_cron",
+        "account_reconcile_enabled",
+        "account_reconcile_cron",
         "scheduled_probe_register_cooldown_minutes",
         "request_audit_enabled",
         "request_audit_auto_scan_enabled",

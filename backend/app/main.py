@@ -15,16 +15,18 @@ from app.persistence.account_repository import AccountRepository
 from app.persistence.auth_repository import AuthRepository
 from app.persistence.chat_provider_repository import ChatProviderRepository
 from app.persistence.database import Database
+from app.persistence.keepalive_repository import KeepAliveRepository
 from app.persistence.probe_repository import ProbeRepository
 from app.persistence.register_event_repository import RegisterEventRepository
 from app.persistence.request_audit_repository import RequestAuditRepository
 from app.persistence.settings_repository import SettingsRepository
 from app.persistence.sso_report_repository import SsoReportRepository
-from app.persistence.keepalive_repository import KeepAliveRepository
+from app.services.account_reconcile import AccountReconcileService
 from app.services.account_service import AccountService
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.egress_service import EgressService
+from app.services.keepalive import KeepAliveService
 from app.services.probe_manager import ProbeManager
 from app.services.quality_retry_isolation import QualityRetryIsolationService
 from app.services.register_integration import RegisterIntegrationService
@@ -34,7 +36,6 @@ from app.services.settings_service import RuntimeSettingsService
 from app.services.sso_report_service import SsoReportService
 from app.services.update_check import UpdateCheckService
 from app.services.wechat_notification import WeChatAccountNotificationService
-from app.services.keepalive import KeepAliveService
 from app.web.exception_handlers import install_exception_handlers
 from app.web.router import build_router
 
@@ -61,9 +62,7 @@ sso_report_service = SsoReportService(
 )
 grok_client = Grok2APIClient(settings)
 wechat_client = WeChatTestAccountClient(settings)
-wechat_notification_service = WeChatAccountNotificationService(
-    settings, wechat_client
-)
+wechat_notification_service = WeChatAccountNotificationService(settings, wechat_client)
 account_service = AccountService(
     settings=settings,
     client=grok_client,
@@ -108,6 +107,10 @@ quality_retry_isolation_service = QualityRetryIsolationService(
     client=grok_client,
     account_service=account_service,
 )
+account_reconcile_service = AccountReconcileService(
+    client=grok_client,
+    accounts=account_repository,
+)
 scheduler_service = SchedulerService(
     settings=settings,
     repository=probe_repository,
@@ -115,6 +118,7 @@ scheduler_service = SchedulerService(
     recovery_callback=account_service.recover_due_quarantines,
     request_audit_callback=request_audit_service.scan_scheduled,
     quality_retry_callback=quality_retry_isolation_service.scan,
+    account_reconcile_callback=account_reconcile_service.reconcile,
 )
 register_integration_service = RegisterIntegrationService(
     settings=settings,
@@ -132,6 +136,7 @@ keepalive_service = KeepAliveService(
     repository=keepalive_repository,
     client=grok_client,
 )
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -211,6 +216,7 @@ app.include_router(
         wechat_notifications=wechat_notification_service,
         updates=update_check_service,
         keepalive=keepalive_service,
+        account_reconcile=account_reconcile_service,
     )
 )
 

@@ -18,6 +18,7 @@ from .probe_manager import ProbeManager
 
 RequestAuditCallback = Callable[[], Awaitable[dict[str, Any]]]
 QualityRetryCallback = Callable[[], Awaitable[dict[str, Any]]]
+AccountReconcileCallback = Callable[[], Awaitable[dict[str, Any]]]
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class SchedulerService:
         recovery_callback: Callable[[], Awaitable[dict[str, Any]]],
         request_audit_callback: RequestAuditCallback | None = None,
         quality_retry_callback: QualityRetryCallback | None = None,
+        account_reconcile_callback: AccountReconcileCallback | None = None,
     ):
         self.settings = settings
         self.repository = repository
@@ -39,6 +41,7 @@ class SchedulerService:
         self.recovery_callback = recovery_callback
         self.request_audit_callback = request_audit_callback
         self.quality_retry_callback = quality_retry_callback
+        self.account_reconcile_callback = account_reconcile_callback
         self.scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone)
 
     async def start(self) -> None:
@@ -85,6 +88,20 @@ class SchedulerService:
                 ),
                 id="system:quarantine-recovery",
                 name="隔离恢复检查",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=self.settings.scheduler_misfire_grace_seconds,
+            )
+        if self.settings.account_reconcile_enabled and self.account_reconcile_callback is not None:
+            self.scheduler.add_job(
+                self._run_account_reconcile,
+                CronTrigger.from_crontab(
+                    self.settings.account_reconcile_cron,
+                    timezone=ZoneInfo(self.settings.scheduler_timezone),
+                ),
+                id="system:account-reconcile",
+                name="账号对账清理",
                 replace_existing=True,
                 coalesce=True,
                 max_instances=1,
@@ -245,6 +262,38 @@ class SchedulerService:
             )
             logger.exception("scheduled probe plan %s failed", plan_id)
             raise
+
+    async def _run_account_reconcile(self) -> None:
+        if self.account_reconcile_callback is None:
+            return
+        execution_id = self.repository.start_schedule_execution("system:account-reconcile")
+        try:
+            result = await self.account_reconcile_callback()
+            removed = int(result.get("removed") or 0)
+            skipped = result.get("skipped")
+            if skipped:
+                message = f"已跳过：{skipped}"
+                status = "skipped"
+            elif removed:
+                message = f"清理 {removed} 个已不存在的账号评估"
+                status = "succeeded"
+            else:
+                message = "无幽灵账号"
+                status = "succeeded"
+            self.repository.finish_schedule_execution(
+                execution_id,
+                status=status,
+                message=message,
+                detail=result,
+            )
+        except Exception as exc:
+            self.repository.finish_schedule_execution(
+                execution_id,
+                status="failed",
+                message=str(exc),
+                detail={},
+            )
+            logger.exception("account reconcile failed")
 
     async def _run_recovery(self) -> None:
         execution_id = self.repository.start_schedule_execution("system:quarantine-recovery")

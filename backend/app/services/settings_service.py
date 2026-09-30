@@ -231,6 +231,8 @@ class RuntimeSettingsService:
             "schedulerTimezone": s.scheduler_timezone,
             "schedulerMisfireGraceSeconds": s.scheduler_misfire_grace_seconds,
             "recoveryCron": s.recovery_cron,
+            "accountReconcileEnabled": s.account_reconcile_enabled,
+            "accountReconcileCron": s.account_reconcile_cron,
             "scheduledProbeRegisterCooldownMinutes": (
                 s.scheduled_probe_register_cooldown_minutes
             ),

@@ -122,7 +122,13 @@ class KeepAliveService:
         due = self.repository.claim_due(limit=self.settings.keepalive_batch_size)
         due = [row for row in due if not self._is_backed_off(row)]
         if not due:
-            return {"skipped": "none_due", "tracked": sync["tracked"], "attempted": 0, "succeeded": 0, "failed": 0}
+            return {
+                "skipped": "none_due",
+                "tracked": sync["tracked"],
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+            }
         results = await self._run_batch(due)
         logger.info(
             "keepalive tick tracked=%s added=%s removed=%s due=%s ok=%s failed=%s",
