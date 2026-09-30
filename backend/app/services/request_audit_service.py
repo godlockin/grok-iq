@@ -1078,6 +1078,17 @@ class RequestAuditService:
                 candidates.append(matched[0])
         return candidates
 
+    def _internal_client_key_prefix(self) -> str:
+        """Prefix identifying client keys GrokIQ creates for its own traffic.
+
+        Derived from ``probe_route_prefix`` rather than hardcoded, so an
+        operator who renames the prefix keeps the filter aligned with what the
+        integration actually sends upstream.
+        """
+
+        prefix = str(self.settings.probe_route_prefix or "").strip()
+        return f"{prefix}-" if prefix else ""
+
     def _new_risk_account_ids(
         self,
         records: list[dict[str, Any]],
@@ -1086,21 +1097,39 @@ class RequestAuditService:
         evaluations: dict[str, AuditRiskEvaluation] | None = None,
     ) -> set[int]:
         boundary = ensure_utc(discovered_after) or utc_now()
-        # GrokIQ's own probe traffic is deliberately excluded. A probe request
-        # is generated to measure an account, so treating its throughput as
-        # independent evidence would let a probe quarantine the very account it
-        # was measuring. In production this re-isolated account 106 seconds
-        # after a re-verification probe had correctly cleared it.
+        # GrokIQ's own probe traffic must never drive the mutation path. A probe
+        # request is generated deliberately to measure an account, so its
+        # throughput is not independent evidence about that account.
+        #
+        # Two filters, because neither alone is sufficient:
+        #
+        #   * The client-key name is authoritative and available immediately.
+        #     Every GrokIQ probe, recheck and keep-alive request is created
+        #     through a temporary client key named with ``probe_route_prefix``,
+        #     and upstream records that name on the audit.
+        #   * The probe-sample join only matches after a run finishes, so it
+        #     has a window: a scan that runs while the probe is still in flight
+        #     sees the audit before the sample is written. Measured live, 14 of
+        #     24 probe audits were unlinked at scan time and all 14 went on to
+        #     quarantine an account.
+        #
+        # The client-key filter closes that window. The sample join stays as a
+        # second line of defence for rows whose key name was not projected.
         probe_audit_ids = self.probes.probe_audit_ids(
             {
                 _positive_int(row.get("upstream_id")) or 0
                 for row in records
             }
         ) if self.probes is not None else set()
+        internal_prefix = self._internal_client_key_prefix()
         result: set[int] = set()
         for row in records:
             account_id = _positive_int(row.get("account_id"))
             if account_id is None:
+                continue
+            if internal_prefix and str(row.get("client_key_name") or "").startswith(
+                internal_prefix
+            ):
                 continue
             upstream_id = _positive_int(row.get("upstream_id"))
             if upstream_id is not None and upstream_id in probe_audit_ids:

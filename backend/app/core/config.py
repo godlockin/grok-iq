@@ -246,6 +246,14 @@ class Settings(BaseSettings):
     buffer_first_token_share: float = Field(default=0.85, ge=0.5, le=0.99)
     min_generation_ms: int = Field(default=250, ge=1, le=60_000)
     minimum_output_tokens: int = Field(default=32, ge=1, le=4096)
+    # TPS is output divided by generation time, so a short reply is fast by
+    # arithmetic rather than by capability. Measured over this deployment:
+    # replies under 200 tokens average 1309 TPS, while 850-899 tokens average
+    # 310 and 200-249 average 80. Judging a short reply against a fixed
+    # throughput floor therefore condemns the model for answering concisely.
+    # Below this many output tokens a TPS-based rule cannot be evaluated and
+    # the sample is observed instead of counted.
+    audit_tps_min_output_tokens: int = Field(default=200, ge=0, le=4096)
     auto_quarantine: bool = False
     auto_quarantine_recovery_enabled: bool = True
     auto_isolation_enabled: bool = False
@@ -376,6 +384,7 @@ class Settings(BaseSettings):
         "buffer_first_token_share",
         "min_generation_ms",
         "minimum_output_tokens",
+        "audit_tps_min_output_tokens",
         "auto_quarantine",
         "auto_quarantine_recovery_enabled",
         "auto_isolation_enabled",

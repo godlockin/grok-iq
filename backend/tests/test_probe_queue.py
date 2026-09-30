@@ -243,9 +243,12 @@ def test_account_risk_uses_all_period_egress_samples(tmp_path: Path):
                 "egress_name": "test",
                 "status": "done",
                 "status_code": 200,
-                "output_tokens": 100,
+                # 250 output tokens keeps the sample above
+                # ``audit_tps_min_output_tokens`` so the throughput band is
+                # still judged; a 100-token reply is fast by arithmetic.
+                "output_tokens": 250,
                 "reasoning_tokens": 0,
-                "visible_tokens": 100,
+                "visible_tokens": 250,
                 "chunk_count": 2,
                 "first_token_ms": 1000,
                 "duration_ms": 1100,
@@ -338,9 +341,11 @@ def test_all_egress_formula_migration_recalculates_existing_samples_once(
             "egress_name": "诊断出口",
             "status": "done",
             "status_code": 200,
-            "output_tokens": 100,
+            # Above ``audit_tps_min_output_tokens`` so the throughput band is
+            # still judged when this sample is recalculated.
+            "output_tokens": 250,
             "reasoning_tokens": 0,
-            "visible_tokens": 100,
+            "visible_tokens": 250,
             "chunk_count": 2,
             "first_token_ms": 1000,
             "duration_ms": 1100,

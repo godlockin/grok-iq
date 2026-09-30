@@ -320,6 +320,7 @@ class RuntimeSettingsService:
             "bufferFirstTokenShare": s.buffer_first_token_share,
             "minGenerationMs": s.min_generation_ms,
             "minimumOutputTokens": s.minimum_output_tokens,
+            "auditTpsMinOutputTokens": s.audit_tps_min_output_tokens,
             "autoQuarantine": s.auto_quarantine,
             "autoQuarantineRecoveryEnabled": s.auto_quarantine_recovery_enabled,
             "autoIsolationEnabled": s.auto_isolation_enabled,

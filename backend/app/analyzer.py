@@ -318,6 +318,9 @@ class Thresholds:
     probe_tps_override_min_first_token_ms: int = 5000
     probe_tps_override_max_generation_ms: int = 1000
     minimum_output_tokens: int = 32
+    # Minimum output length before a TPS-based rule may judge a sample. See
+    # ``_tps_is_comparable``: short replies are fast by arithmetic.
+    audit_tps_min_output_tokens: int = 200
     buffer_first_token_share: float = 0.85
     min_generation_ms: int = 250
     consecutive_anomalies: int = 3
@@ -606,7 +609,29 @@ def _rule_media_input_observe(
     return None
 
 
+def _tps_is_comparable(context: RuleContext, thresholds: Thresholds) -> bool:
+    """Return whether this sample's throughput can be judged at all.
+
+    TPS is ``output_tokens / generation_seconds``. A reply that is short by
+    nature is therefore fast by arithmetic, not by capability: measured over
+    this deployment, replies under 200 tokens averaged 1309 TPS, 200-249
+    averaged 80, and 850-899 averaged 310. Applying a fixed throughput floor
+    across that range condemns a model for answering briefly.
+
+    Requiring a minimum output length makes the comparison like-for-like. This
+    only gates the TPS band rules; ``marker_miss`` and the error rules are
+    unaffected, because neither depends on throughput.
+    """
+
+    minimum = int(getattr(thresholds, "audit_tps_min_output_tokens", 0) or 0)
+    if minimum <= 0:
+        return True
+    return context.output_tokens >= minimum
+
+
 def _rule_buffered_soft(context: RuleContext, thresholds: Thresholds) -> RuleMatch | None:
+    if not _tps_is_comparable(context, thresholds):
+        return None
     if (
         thresholds.degradation_tps <= context.tps < thresholds.strong_degradation_tps
         and context.buffered
@@ -621,6 +646,8 @@ def _rule_buffered_soft(context: RuleContext, thresholds: Thresholds) -> RuleMat
 
 
 def _rule_elevated(context: RuleContext, thresholds: Thresholds) -> RuleMatch | None:
+    if not _tps_is_comparable(context, thresholds):
+        return None
     if thresholds.degradation_tps <= context.tps < thresholds.strong_degradation_tps:
         return RuleMatch(
             "elevated",
@@ -632,6 +659,8 @@ def _rule_elevated(context: RuleContext, thresholds: Thresholds) -> RuleMatch | 
 
 
 def _rule_buffered_hard(context: RuleContext, thresholds: Thresholds) -> RuleMatch | None:
+    if not _tps_is_comparable(context, thresholds):
+        return None
     if context.tps >= thresholds.strong_degradation_tps and context.buffered:
         return RuleMatch(
             "buffered_hard",
@@ -644,6 +673,8 @@ def _rule_buffered_hard(context: RuleContext, thresholds: Thresholds) -> RuleMat
 
 
 def _rule_fast_risk(context: RuleContext, thresholds: Thresholds) -> RuleMatch | None:
+    if not _tps_is_comparable(context, thresholds):
+        return None
     if context.tps >= thresholds.strong_degradation_tps:
         return RuleMatch(
             "fast_risk",

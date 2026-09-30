@@ -210,6 +210,107 @@ def test_real_user_traffic_still_triggers_a_quarantine():
     assert trigger == {7}
 
 
+def test_probe_client_key_name_is_excluded_before_the_sample_exists():
+    """The client-key filter must work with no timing window at all.
+
+    Filtering on the linked probe sample only works after the run finishes.
+    A scan that lands while the probe is still in flight sees the audit before
+    the sample exists, and that audit used to quarantine the account. Measured
+    live: 14 of 24 probe audits were unlinked at scan time, and all 14 led to
+    a quarantine.
+    """
+
+    probes = MagicMock()
+    # Nothing is linked yet: the probe is still running.
+    probes.probe_audit_ids.return_value = set()
+    service = RequestAuditService(
+        settings=Settings(_env_file=None, probe_route_prefix="grokiq-probe"),
+        client=MagicMock(),
+        repository=MagicMock(),
+        probes=probes,
+    )
+    now = utc_now()
+    records = [
+        {
+            "upstream_id": str(index),
+            "account_id": 7,
+            "client_key_name": f"grokiq-probe-{index:012x}",
+            "status_code": 200,
+            "output_tokens": 1500,
+            "reasoning_tokens": 0,
+            "reasoning_tokens_reported": True,
+            "first_token_ms": 100,
+            "duration_ms": 2000,
+            "tps": 900,
+            "model_upstream_model": "Build/grok-4.6",
+            "model_public_id": "grok-4.6",
+            "operation": "chat",
+            "media_input_images": 0,
+            "fetched_at": now,
+            "created_at": now,
+        }
+        for index in (1, 2, 3, 4)
+    ]
+    evaluations = service._audit_risk_evaluations(records)
+    assert evaluations["4"].classification.name == "high"
+
+    trigger = service._new_risk_account_ids(
+        records,
+        discovered_after=now - timedelta(minutes=5),
+        evaluations=evaluations,
+    )
+
+    assert trigger == set()
+
+
+def test_renaming_the_probe_prefix_keeps_the_filter_aligned():
+    probes = MagicMock()
+    probes.probe_audit_ids.return_value = set()
+    service = RequestAuditService(
+        settings=Settings(_env_file=None, probe_route_prefix="custom-probe"),
+        client=MagicMock(),
+        repository=MagicMock(),
+        probes=probes,
+    )
+    now = utc_now()
+    record = {
+        "upstream_id": "1",
+        "account_id": 7,
+        "client_key_name": "custom-probe-abc123",
+        "status_code": 200,
+        "output_tokens": 1500,
+        "reasoning_tokens": 0,
+        "reasoning_tokens_reported": True,
+        "first_token_ms": 100,
+        "duration_ms": 2000,
+        "tps": 900,
+        "model_upstream_model": "Build/grok-4.6",
+        "model_public_id": "grok-4.6",
+        "operation": "chat",
+        "media_input_images": 0,
+        "fetched_at": now,
+        "created_at": now,
+    }
+    evaluations = service._audit_risk_evaluations([record])
+
+    assert (
+        service._new_risk_account_ids(
+            [record],
+            discovered_after=now - timedelta(minutes=5),
+            evaluations=evaluations,
+        )
+        == set()
+    )
+    # A user key that merely shares a substring must still be judged.
+    other = {**record, "upstream_id": "2", "client_key_name": "Default User Key"}
+    other_evaluations = service._audit_risk_evaluations([other])
+    assert service._new_risk_account_ids(
+        [other],
+        discovered_after=now - timedelta(minutes=5),
+        evaluations=other_evaluations,
+    ) == {7}
+
+
 def _audit_records(*, operation: str, images: int, tps: float, count: int = 4):
     now = utc_now()
     return [

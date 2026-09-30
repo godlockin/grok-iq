@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from app.analyzer import (
     SampleMetrics,
     Thresholds,
@@ -6,6 +8,85 @@ from app.analyzer import (
     risk_rule_definitions,
     risk_status,
 )
+
+
+def test_short_reply_is_not_judged_by_throughput():
+    """A brief answer is fast by arithmetic, not by capability.
+
+    TPS is output divided by generation time, so a 27-token reply scores in
+    the thousands. Measured over this deployment, replies under 200 tokens
+    averaged 1309 TPS, and every isolation in the last 90 minutes came from a
+    ``fast_risk`` verdict with a median of 1011 TPS on replies that had
+    returned their marker.
+    """
+
+    result = classify_audit_sample(
+        status_code=200,
+        output_tokens=27,
+        reasoning_tokens=0,
+        first_token_ms=3139,
+        duration_ms=3145,
+        tps=4500,
+        thresholds=Thresholds(),
+    )
+
+    assert result.name == "normal"
+
+
+def test_marker_miss_still_condemns_a_short_reply():
+    """The output floor only gates throughput bands, never instruction failure.
+
+    ``marker_miss`` is registered for the ``probe`` scope, so this goes
+    through ``classify_sample``: a 27-token reply that dropped the marker is
+    still a real failure, while the same length with the marker intact is
+    reported as merely unmeasurable rather than fast.
+    """
+
+    short = SampleMetrics(
+        status_code=200,
+        output_tokens=27,
+        reasoning_tokens=0,
+        first_token_ms=3139,
+        duration_ms=3145,
+        egress_key="direct",
+    )
+
+    missed = classify_sample(replace(short, expected_matched=False), Thresholds())
+    assert missed.name == "marker_miss"
+
+    intact = classify_sample(replace(short, expected_matched=True), Thresholds())
+    assert intact.name == "insufficient"
+    assert intact.rule_id == "insufficient_output"
+
+
+def test_output_floor_is_configurable_and_zero_disables_it():
+    short = {
+        "status_code": 200,
+        "output_tokens": 27,
+        "reasoning_tokens": 0,
+        "first_token_ms": 3139,
+        "duration_ms": 3145,
+        "tps": 4500,
+    }
+
+    assert (
+        classify_audit_sample(
+            **short, thresholds=Thresholds(audit_tps_min_output_tokens=20)
+        ).name
+        == "high"
+    )
+    assert (
+        classify_audit_sample(
+            **short, thresholds=Thresholds(audit_tps_min_output_tokens=0)
+        ).name
+        == "high"
+    )
+    assert (
+        classify_audit_sample(
+            **short, thresholds=Thresholds(audit_tps_min_output_tokens=200)
+        ).name
+        == "normal"
+    )
 
 
 def test_normal_throughput_does_not_fall_through_to_fast_risk():
@@ -62,7 +143,9 @@ def test_media_input_high_tps_is_observed_instead_of_high_risk():
 def test_media_input_observation_can_be_disabled():
     result = classify_audit_sample(
         status_code=200,
-        output_tokens=42,
+        # Long enough for the TPS band to be judged: a 42-token reply is fast
+        # by arithmetic, so ``fast_risk`` no longer applies to it.
+        output_tokens=420,
         reasoning_tokens=20,
         first_token_ms=3139,
         duration_ms=3149,

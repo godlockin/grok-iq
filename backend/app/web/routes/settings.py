@@ -83,6 +83,7 @@ def build_settings_router(
             "buffer_first_token_share",
             "min_generation_ms",
             "minimum_output_tokens",
+            "audit_tps_min_output_tokens",
             "reasoning_zero_risk_enabled",
             "reasoning_model_policies",
             "media_input_observe_enabled",

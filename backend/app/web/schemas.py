@@ -569,6 +569,9 @@ class RuntimeSettingsInput(BaseModel):
     )
     min_generation_ms: int | None = Field(default=None, alias="minGenerationMs", ge=1, le=60_000)
     minimum_output_tokens: int | None = Field(default=None, alias="minimumOutputTokens", ge=1, le=4096)
+    audit_tps_min_output_tokens: int | None = Field(
+        default=None, alias="auditTpsMinOutputTokens", ge=0, le=4096
+    )
     auto_quarantine: bool | None = Field(default=None, alias="autoQuarantine")
     auto_quarantine_recovery_enabled: bool | None = Field(
         default=None, alias="autoQuarantineRecoveryEnabled"
